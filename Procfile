@@ -1,1 +1,1 @@
-worker: python LUND.py
+web: python HOST.py
