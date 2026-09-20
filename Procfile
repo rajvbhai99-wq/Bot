@@ -1,1 +1,1 @@
-web: python HOST.py
+worker: python BGMI.py
