@@ -594,8 +594,9 @@ def generate_global_status_ui():
     get_active_attack_count()
     attacks = list(active_attacks.items())
     if not attacks:
-        return "No active attacks right now."
-    header = "<b>ACTIVE ATTACKS STATUS</b>\n----------------------"
+        return "🚀 No active attacks right now."
+
+    header = "╭━━━━━━━〔 🚀 𝗦𝗧𝗔𝗧𝗨𝗦 〕━━━━━━━╮\n┃"
     body = ""
     for idx, (attack_id, info) in enumerate(attacks[:10], 1):
         remaining = (info['end_time'] - datetime.now()).total_seconds()
@@ -606,11 +607,15 @@ def generate_global_status_ui():
         percent = int((elapsed / total_dur) * 100) if total_dur > 0 else 0
         filled = int(percent / 5)
         empty = 20 - filled
-        bar = "#" * filled + "-" * empty
-        user_id = info.get('user_id', 'Unknown')
-        user_type = "Private" if not info.get('is_group', False) else "Group"
-        body += f"\n<b>Target:</b> <code>{info['target']} {info['port']}</code>\n<b>Remaining:</b> {int(remaining)}s | <b>By:</b> {user_id} ({user_type})\n<b>Progress:</b> {bar} {percent}%\n"
-    footer = "----------------------"
+        bar = "█" * filled + "▒" * empty
+        display_name = info.get('username') or info.get('user_id', 'Unknown')
+        target = f"{info['target']}:{info['port']}"
+        body += f"\n┃  🟢 𝗦𝗧𝗔𝗧𝗨𝗦     ➜ 𝗔𝗖𝗧𝗜𝗩𝗘\n"
+        body += f"┃  🎯 𝗧𝗔𝗥𝗚𝗘𝗧     ➜ <code>{target}</code>\n"
+        body += f"┃  ⏱️ 𝗥𝗘𝗠𝗔𝗜𝗡𝗜𝗡𝗚  ➜ {int(remaining)}s\n"
+        body += f"┃  📊 𝗣𝗥𝗢𝗚𝗥𝗘𝗦𝗦   ➜ {bar} {percent}%\n"
+        body += f"┃  👤 𝗨𝗦𝗘𝗥        ➜ {display_name}\n┃\n"
+    footer = "╰━━━━━━━━━━━━━━━━━━━━━━━╯"
     return header + body + footer
 
 def start_attack(target, port, duration, message, attack_id, api_index, is_group=False):
@@ -948,10 +953,10 @@ def generate_key_command(message):
             keys_collection.insert_one(key_doc)
             generated_keys.append(key)
         if count == 1:
-            bot.reply_to(message, f"<b>Key Generated!</b>\n\n<code>/redeem {generated_keys[0]}</code>\n\n<b>Duration:</b> {duration_label}", parse_mode="HTML")
+            bot.reply_to(message, f"<b>Key Generated!</b>\n\n<code>/redeem {generated_keys[0]}</code>\n\n<b>Duration:</b> {duration_label}\n\n<i>Upar wali line pe tap karo - puri command copy ho jayegi.</i>", parse_mode="HTML")
         else:
             keys_text = "\n".join([f"<code>/redeem {k}</code>" for k in generated_keys])
-            bot.reply_to(message, f"<b>{count} Keys Generated!</b>\n\n{keys_text}\n\n<b>Duration:</b> {duration_label}", parse_mode="HTML")
+            bot.reply_to(message, f"<b>{count} Keys Generated!</b>\n\n{keys_text}\n\n<b>Duration:</b> {duration_label}\n\n<i>Har line pe tap karo - puri command copy ho jayegi.</i>", parse_mode="HTML")
     elif reseller:
         if reseller.get('blocked'):
             bot.reply_to(message, "Aapka panel blocked hai!")
@@ -995,10 +1000,10 @@ def generate_key_command(message):
         except Exception as e:
             print(f"Failed to notify owner: {e}")
         if count == 1:
-            bot.reply_to(message, f"<b>Key Generated!</b>\n\n<code>/redeem {generated_keys[0]}</code>\n\n<b>Duration:</b> {pricing['label']}\n<b>Balance:</b> {new_balance} Rs", parse_mode="HTML")
+            bot.reply_to(message, f"<b>Key Generated!</b>\n\n<code>/redeem {generated_keys[0]}</code>\n\n<b>Duration:</b> {pricing['label']}\n<b>Balance:</b> {new_balance} Rs\n\n<i>Upar wali line pe tap karo - puri command copy ho jayegi.</i>", parse_mode="HTML")
         else:
             keys_text = "\n".join([f"<code>/redeem {k}</code>" for k in generated_keys])
-            bot.reply_to(message, f"<b>{count} Keys Generated!</b>\n\n{keys_text}\n\n<b>Duration:</b> {pricing['label']}\n<b>Cost:</b> {total_price} Rs\n<b>Balance:</b> {new_balance} Rs", parse_mode="HTML")
+            bot.reply_to(message, f"<b>{count} Keys Generated!</b>\n\n{keys_text}\n\n<b>Duration:</b> {pricing['label']}\n<b>Cost:</b> {total_price} Rs\n<b>Balance:</b> {new_balance} Rs\n\n<i>Har line pe tap karo - puri command copy ho jayegi.</i>", parse_mode="HTML")
     else:
         bot.reply_to(message, "Ye command sirf owner/reseller use kar sakta hai!")
 
@@ -1486,7 +1491,7 @@ def reseller_trail_command(message):
         key_doc = {'key': key, 'duration_seconds': hours * 3600, 'duration_label': f"{hours} hours (Reseller Trail)", 'created_at': datetime.now(), 'created_by': message.from_user.id, 'created_by_username': reseller_username, 'created_by_type': 'reseller_trail', 'used': False, 'used_by': None, 'used_at': None, 'max_users': max_users, 'current_users': 0, 'is_trail': True, 'reseller_id': reseller_id}
         keys_collection.insert_one(key_doc)
         try:
-            bot.send_message(reseller_id, f"<b>Trail Key Generated!</b>\n\n/redeem <code>{key}</code>\n\n<b>Duration:</b> {hours} hours\n<b>Max Users:</b> {max_users}\n\nBot - @BGMIXPOWERBOT\n\n<i>Ye key {max_users} users use kar sakte hai.</i>\n<i>Key pe tap karke copy karo, phir /redeem me paste karo.</i>", parse_mode="HTML")
+            bot.send_message(reseller_id, f"<b>Trail Key Generated!</b>\n\n<code>/redeem {key}</code>\n\n<b>Duration:</b> {hours} hours\n<b>Max Users:</b> {max_users}\n\nBot - @BGMIXPOWERBOT\n\n<i>Ye key {max_users} users use kar sakte hai.</i>\n<i>Upar wali line pe tap karo - puri /redeem command copy ho jayegi.</i>", parse_mode="HTML")
             sent_count += 1
         except:
             pass
@@ -1517,7 +1522,7 @@ def owner_trail_command(message):
     key = f"{KEY_PREFIX}{generate_key(12)}"
     key_doc = {'key': key, 'duration_seconds': int(duration.total_seconds()), 'duration_label': f"{duration_label} (Owner Trail)", 'created_at': datetime.now(), 'created_by': message.from_user.id, 'created_by_type': 'owner_trail', 'used': False, 'used_by': None, 'used_at': None, 'max_users': max_users, 'current_users': 0, 'is_trail': True}
     keys_collection.insert_one(key_doc)
-    bot.reply_to(message, f"<b>Trail Key Generated!</b>\n\n/redeem <code>{key}</code>\n\n<b>Duration:</b> {duration_label}\n<b>Max Users:</b> {max_users}\n\nBot - @BGMIXPOWERBOT\n\n<i>Ye key {max_users} users use kar sakte hai.</i>\n<i>Key pe tap karke copy karo, phir /redeem me paste karo.</i>", parse_mode="HTML")
+    bot.reply_to(message, f"<b>Trail Key Generated!</b>\n\n<code>/redeem {key}</code>\n\n<b>Duration:</b> {duration_label}\n<b>Max Users:</b> {max_users}\n\nBot - @BGMIXPOWERBOT\n\n<i>Ye key {max_users} users use kar sakte hai.</i>\n<i>Upar wali line pe tap karo - puri /redeem command copy ho jayegi.</i>", parse_mode="HTML")
 
 @bot.message_handler(commands=["user_resell"])
 def user_resell_command(message):
@@ -2241,7 +2246,16 @@ def handle_attack(message):
                 user_attack_history[user_id] = {}
             user_attack_history[user_id][f"{target}:{port}"] = datetime.now()
             api_in_use[attack_id] = api_index
-            active_attacks[attack_id] = {'target': target, 'port': port, 'duration': duration, 'user_id': user_id, 'start_time': datetime.now(), 'end_time': datetime.now() + timedelta(seconds=duration), 'is_group': is_group}
+            active_attacks[attack_id] = {
+                'target': target,
+                'port': port,
+                'duration': duration,
+                'user_id': user_id,
+                'username': message.from_user.first_name or message.from_user.username or str(user_id),
+                'start_time': datetime.now(),
+                'end_time': datetime.now() + timedelta(seconds=duration),
+                'is_group': is_group
+            }
         thread = threading.Thread(target=start_attack, args=(target, port, duration, message, attack_id, api_index, is_group))
         thread.start()
     except ValueError:
@@ -2253,140 +2267,45 @@ def show_help(message):
     if check_banned(message): return
     user_id = message.from_user.id
     if is_owner(user_id):
-        help_text = f'''👑 OWNER PANEL
+        help_text = f'''OWNER PANEL
 
-🔑 KEY MGMT
-• /gen — Generate keys
-• /key — Key details
-• /allkeys — All keys list
-• /delkey /delete_key — Delete key
-• /del_exp_key — Delete expired keys
-• /trail (or /trial) — Trail key
-• /reseller_trail (or /reseller_trial) — Trail to resellers
-• /del_trail — Delete all trail keys
+KEY MGMT: /gen, /key, /allkeys, /delkey, /delete_key, /del_exp_key, /trail (or /trial), /reseller_trail (or /reseller_trial), /del_trail
+USER MGMT: /user, /allusers, /extend, /extend_all, /down, /del_exp_usr, /ban, /unban, /banned, /tban
+RESELLER: /add_reseller, /remove_reseller, /block_reseller, /unblock_reseller, /all_resellers, /saldo_add, /saldo_remove, /saldo, /user_resell, /setprice
+BROADCAST: /broadcast, /broadcast_reseller, /broadcast_paid
+ATTACK: /attack, /status, /settings, /private_max, /group_max, /private_cooldown, /group_cooldown
+PROTECTION: /ddos_on, /ddos_off, /required_on, /required_off
+GROUP: /addgrp, /removegrp, /groups, /channels
+REEL: /reel_on, /reel_off, /addreel, /removereel, /listreels
+SETUP: /setcanary, /setios, /setandroid, /setupstatus, /delsetup
+FEEDBACK: /feedback_on, /feedback_off
+MONITOR: /live, /logs, /del_logs
+MAINTENANCE: /maintenance, /ok
 
-👥 USER MGMT
-• /user — User info
-• /allusers — All users list
-• /extend — Extend user time
-• /extend_all — Extend all users
-• /down — Reduce user time
-• /del_exp_usr — Delete expired users
-• /ban — Permanent ban
-• /tban — Temporary ban
-• /unban — Remove ban
-• /banned — Banned users list
-
-💼 RESELLER
-• /add_reseller — Add reseller
-• /remove_reseller — Remove reseller
-• /block_reseller — Block reseller
-• /unblock_reseller — Unblock reseller
-• /all_resellers — All resellers
-• /saldo_add — Add balance
-• /saldo_remove — Remove balance
-• /saldo — Check balance
-• /user_resell — Reseller's users
-• /setprice — Change prices
-
-📢 BROADCAST
-• /broadcast — All users
-• /broadcast_reseller — Resellers only
-• /broadcast_paid — Paid users only
-
-⚡ ATTACK
-• /attack — Start attack
-• /status — Live attacks
-• /settings — Bot settings
-• /private_max — Set private max time
-• /group_max — Set group max time
-• /private_cooldown — Set private cooldown
-• /group_cooldown — Set group cooldown
-
-🛡️ PROTECTION
-• /ddos_on /ddos_off — DDoS protection
-• /required_on /required_off — Channel requirement
-• /block_ip — Block IP prefix
-• /unblock_ip — Unblock IP
-• /blocked_ips — List blocked IPs
-
-📢 GROUP
-• /addgrp — Approve group
-• /removegrp — Remove group
-• /groups — List approved groups
-• /channels — Channel info
-
-🎬 REEL
-• /reel_on /reel_off — Toggle reel
-• /addreel — Add reel
-• /removereel — Remove reel
-• /listreels — List reels
-
-⚙️ SETUP
-• /setcanary /setios /setandroid — Set files
-• /setupstatus — Setup status
-• /delsetup — Delete setup
-
-📸 FEEDBACK
-• /feedback_on /feedback_off
-
-📊 MONITOR
-• /live — Server stats
-• /logs — Attack logs
-• /del_logs — Delete logs
-
-🔧 MAINTENANCE
-• /maintenance — Turn ON
-• /ok — Turn OFF
-
-━━━━━━━━━━━━━━━━━━
-🔢 Max Concurrent: {len(API_LIST)}'''
+Max Concurrent Attacks: {len(API_LIST)}'''
     elif is_reseller(user_id):
-        help_text = f'''💼 RESELLER PANEL
+        help_text = f'''RESELLER PANEL
 
-🆔 BASIC
-• /id — Your ID
-• /ping — Bot status
-
-💰 BALANCE
-• /mysaldo — Check balance
-• /prices — Key prices
-
-🔑 KEY GEN
-• /gen <duration> <count> — Generate keys
-  Example: /gen 1d 5
-
-⚡ ATTACK
-• /redeem — Redeem key
-• /attack — Start attack
-• /status — Live attacks
-• /mykey — Your key
-
-━━━━━━━━━━━━━━━━━━
-🔢 Max Concurrent: {len(API_LIST)}'''
+ID: /id, /ping
+BALANCE: /mysaldo, /prices
+KEY GEN: /gen <duration> <count>
+ATTACK: /redeem, /attack, /status, /mykey
+Max Concurrent Attacks: {len(API_LIST)}'''
     else:
-        help_text = '''╭━━━〔 💎 𝗖𝗢𝗠𝗠𝗔𝗡𝗗 ━━╮
-┃
-┃  ◈  ⚡  /attack
-┃  ◈  📊  /status
-┃  ◈  📦  /mykey
-┃  ◈  🔑  /redeem
-┃  ◈  ✅  /verify
-┃  ◈  🆔  /id
-┃
-╰━━━━━━━━━━━━━━╯
+        help_text = '''CMDS
+- /attack
+- /status
+- /mykey
+- /redeem
+- /verify
+- /id
 
-╭━━━━━━〔 ⚙️ 𝗦𝗘𝗧𝗨𝗣 〕━━━━╮
-┃
-┃  ◈  📦  /canary
-┃  ◈  🍎  /ios
-┃  ◈  🤖  /android
-┃
-╰━━━━━━━━━━━━━━━━━━╯
+SETUP
+- /canary
+- /ios
+- /android
 
-╭━━━━━〔 👑 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 〕━━━━╮
-┃  𝗙𝗔𝗦𝗧  •  💎 𝗣𝗥𝗢 • 𝗦𝗘𝗖𝗨𝗥𝗘
-╰━━━━━━━━━━━━━━━━ ━━━╯'''
+Lets destroy some servers!'''
     bot.reply_to(message, help_text)
 
 @bot.message_handler(commands=["del_trail"])
