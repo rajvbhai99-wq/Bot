@@ -2743,7 +2743,8 @@ def live_stats_command(message):
     minutes, seconds = divmod(remainder, 60)
     uptime_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
     process = psutil.Process()
-    memory_mb = process.memory_info().rss / 1024 / 1024    cpu_percent = process.cpu_percent(interval=0.1)
+    memory_mb = process.memory_info().rss / 1024 / 1024
+    cpu_percent = process.cpu_percent(interval=0.1)
     threads = process.num_threads()
     cpu_overall = psutil.cpu_percent(interval=0.1)
     ram = psutil.virtual_memory()
@@ -3039,24 +3040,51 @@ def load_saved_channels():
 load_saved_channels()
 protection.enabled = get_ddos_protection()
 
-print("🔥 OGGY BHAI BOT STARTING...")
-print(f"🌐 API: {API_BASE}")
-print(f"🔑 API Key: {API_KEY[:20]}...")
-print(f"🛡️ DDoS Protection: {'ON' if get_ddos_protection() else 'OFF'}")
-print(f"📢 Channel Required: {'REQUIRED' if get_channel_required() else 'NOT REQUIRED'}")
-print(f"📢 Approved Groups: {len(get_approved_groups())}")
-print(f"⚡ Private Max Time: {get_private_max_attack_time()}s")
-print(f"⚡ Group Max Time: {get_group_max_attack_time()}s")
-print(f"⏳ Private Cooldown: {get_private_cooldown()}s")
-print(f"⏳ Group Cooldown: {get_group_cooldown()}s")
-print(f"🔢 Max Concurrent Slots: {len(API_LIST)}")
-print(f"🎬 Reel Feature: {'ON' if get_reel_enabled() else 'OFF'} ({len(get_reel_list())} reels)")
-print(f"📸 Feedback Feature: {'ON' if get_feedback_enabled() else 'OFF'}")
-print("=" * 50)
+print("🔥 OGGY BHAI BOT STARTING...", flush=True)
+print(f"🌐 API: {API_BASE}", flush=True)
+print(f"🔑 API Key: {API_KEY[:20]}...", flush=True)
+print(f"🛡️ DDoS Protection: {'ON' if get_ddos_protection() else 'OFF'}", flush=True)
+print(f"📢 Channel Required: {'REQUIRED' if get_channel_required() else 'NOT REQUIRED'}", flush=True)
+print(f"📢 Approved Groups: {len(get_approved_groups())}", flush=True)
+print(f"⚡ Private Max Time: {get_private_max_attack_time()}s", flush=True)
+print(f"⚡ Group Max Time: {get_group_max_attack_time()}s", flush=True)
+print(f"⏳ Private Cooldown: {get_private_cooldown()}s", flush=True)
+print(f"⏳ Group Cooldown: {get_group_cooldown()}s", flush=True)
+print(f"🔢 Max Concurrent Slots: {len(API_LIST)}", flush=True)
+print(f"🎬 Reel Feature: {'ON' if get_reel_enabled() else 'OFF'} ({len(get_reel_list())} reels)", flush=True)
+print(f"📸 Feedback Feature: {'ON' if get_feedback_enabled() else 'OFF'}", flush=True)
+print("=" * 50, flush=True)
 
+# ===== RAILWAY HEALTH CHECK SERVER =====
+def run_health_server():
+    try:
+        from http.server import HTTPServer, BaseHTTPRequestHandler
+        port = int(os.getenv("PORT", "8080"))
+
+        class HealthHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/plain')
+                self.end_headers()
+                self.wfile.write(b"Bot is running!")
+
+            def log_message(self, format, *args):
+                pass
+
+        server = HTTPServer(('0.0.0.0', port), HealthHandler)
+        print(f"✅ Health check server started on port {port}", flush=True)
+        server.serve_forever()
+    except Exception as e:
+        print(f"⚠️ Health server error: {e}", flush=True)
+
+health_thread = threading.Thread(target=run_health_server, daemon=True)
+health_thread.start()
+
+# ===== MAIN POLLING LOOP =====
 while True:
     try:
+        print("🚀 Starting bot polling...", flush=True)
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception as e:
-        print("Polling crashed, restarting...", e)
-        time.sleep(3)
+        print(f"Polling crashed, restarting in 5s... Error: {e}", flush=True)
+        time.sleep(5)
