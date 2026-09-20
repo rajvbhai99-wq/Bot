@@ -2743,8 +2743,7 @@ def live_stats_command(message):
     minutes, seconds = divmod(remainder, 60)
     uptime_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
     process = psutil.Process()
-    memory_mb = process.memory_info().rss / 1024 / 1024
-    cpu_percent = process.cpu_percent(interval=0.1)
+    memory_mb = process.memory_info().rss / 1024 / 1024    cpu_percent = process.cpu_percent(interval=0.1)
     threads = process.num_threads()
     cpu_overall = psutil.cpu_percent(interval=0.1)
     ram = psutil.virtual_memory()
@@ -3055,6 +3054,17 @@ print(f"🎬 Reel Feature: {'ON' if get_reel_enabled() else 'OFF'} ({len(get_ree
 print(f"📸 Feedback Feature: {'ON' if get_feedback_enabled() else 'OFF'}", flush=True)
 print("=" * 50, flush=True)
 
+# ===== WEBHOOK DELETE (409 CONFLICT FIX) =====
+print("🔧 Removing any existing webhook...", flush=True)
+try:
+    bot.remove_webhook()
+    print("✅ Webhook removed successfully!", flush=True)
+except Exception as e:
+    print(f"⚠️ Webhook removal error: {e}", flush=True)
+
+# Wait for Telegram to release the previous polling session
+time.sleep(3)
+
 # ===== RAILWAY HEALTH CHECK SERVER =====
 def run_health_server():
     try:
@@ -3080,11 +3090,29 @@ def run_health_server():
 health_thread = threading.Thread(target=run_health_server, daemon=True)
 health_thread.start()
 
-# ===== MAIN POLLING LOOP =====
+# ===== MAIN POLLING LOOP WITH 409 HANDLING =====
+retry_count = 0
 while True:
     try:
         print("🚀 Starting bot polling...", flush=True)
         bot.polling(none_stop=True, interval=0, timeout=20)
+        retry_count = 0
     except Exception as e:
-        print(f"Polling crashed, restarting in 5s... Error: {e}", flush=True)
-        time.sleep(5)
+        error_str = str(e)
+        retry_count += 1
+        print(f"❌ Polling crashed (attempt #{retry_count}): {e}", flush=True)
+
+        # 409 Conflict - another instance is running OR webhook is set
+        if "409" in error_str or "Conflict" in error_str:
+            print("⚠️ 409 Conflict detected! Removing webhook & waiting...", flush=True)
+            try:
+                bot.remove_webhook()
+                print("✅ Webhook removed on retry", flush=True)
+            except Exception as we:
+                print(f"⚠️ Webhook removal failed: {we}", flush=True)
+            wait_time = min(60, 15 + retry_count * 5)
+            print(f"⏳ Waiting {wait_time}s before retry...", flush=True)
+            time.sleep(wait_time)
+        else:
+            print("⏳ Restarting in 5s...", flush=True)
+            time.sleep(5)
