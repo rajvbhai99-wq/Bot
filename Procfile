@@ -1,1 +1,1 @@
-worker: python BGMI.py
+web: python louda.py
